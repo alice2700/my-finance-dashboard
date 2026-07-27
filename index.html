@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#3D4A3F" />
+<title>理財誌</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="理財誌" />
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="topbar-title">理財誌</div>
+    <div class="topbar-updated" id="updatedAt">尚未載入資料</div>
+  </header>
+
+  <main id="app">
+
+    <!-- ============ 總覽 ============ -->
+    <section class="page" id="page-overview">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">目前資產淨值</div>
+          <div class="stat-value" id="statAsset">—</div>
+          <div class="stat-sub" id="statAssetGrowth"></div>
+        </div>
+        <div class="stat-card accent-income">
+          <div class="stat-label">本月收入</div>
+          <div class="stat-value" id="statIncome">—</div>
+        </div>
+        <div class="stat-card accent-expense">
+          <div class="stat-label">本月生活支出</div>
+          <div class="stat-value" id="statExpense">—</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">資產淨值走勢</div>
+        <canvas id="chartAsset" height="180"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-title">每月收入 vs 生活支出</div>
+        <canvas id="chartIncomeExpense" height="180"></canvas>
+      </div>
+    </section>
+
+    <!-- ============ 現金流 ============ -->
+    <section class="page hidden" id="page-cashflow">
+      <div class="card">
+        <div class="card-title">本月收入來源</div>
+        <div id="incomeFlow" class="flow-list"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">本月支出去向</div>
+        <div id="expenseFlow" class="flow-list"></div>
+      </div>
+    </section>
+
+    <!-- ============ 長期目標 ============ -->
+    <section class="page hidden" id="page-goals">
+      <div class="card">
+        <div class="card-title">退休 / 財富自由</div>
+        <div class="goal-row">
+          <span id="goalCurrentAsset">—</span>
+          <span class="goal-target" id="goalFireTarget">目標 —</span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="fireProgressBar"></div></div>
+        <div class="goal-note" id="fireProgressNote"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">購屋頭期款目標</div>
+        <div class="goal-row"><span id="goalHouseTarget">—</span></div>
+        <div class="goal-note" id="goalHouseNote"></div>
+      </div>
+    </section>
+
+    <!-- ============ 股票 ============ -->
+    <section class="page hidden" id="page-stocks">
+      <div class="card">
+        <div class="card-title">持股配置</div>
+        <canvas id="chartStocks" height="220"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-title">持股明細</div>
+        <div id="stockList" class="flow-list"></div>
+      </div>
+    </section>
+
+    <div id="loadError" class="card error hidden">
+      <div class="card-title">無法載入資料</div>
+      <p>請確認 <code>app.js</code> 裡的 <code>API_URL</code> 已經設定成你的 Apps Script 網頁應用程式網址。</p>
+    </div>
+
+  </main>
+
+  <nav class="tabbar">
+    <button class="tab active" data-page="overview">
+      <span>總覽</span>
+    </button>
+    <button class="tab" data-page="cashflow">
+      <span>現金流</span>
+    </button>
+    <button class="tab" data-page="goals">
+      <span>目標</span>
+    </button>
+    <button class="tab" data-page="stocks">
+      <span>股票</span>
+    </button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
