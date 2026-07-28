@@ -2,7 +2,7 @@
 // 設定區：把下面這行換成你自己的 Apps Script 網頁應用程式網址
 // （部署教學裡的「步驟5」會教你怎麼拿到這個網址）
 // ===========================================================
-const API_URL = https://script.google.com/macros/s/AKfycby66uIslo6fvhAl7esqroZedpIiztkDjpkqA130PuJFKw20Hfmqjjk0pWpoDQrpzIgY/exec;
+const API_URL = "https://script.google.com/macros/s/AKfycby66uIslo6fvhAl7esqroZedpIiztkDjpkqA130PuJFKw20Hfmqjjk0pWpoDQrpzIgY/exec";
 
 // ---------- 顏色（跟 style.css 呼應） ----------
 const COLOR_SAGE = "#7C9473";
