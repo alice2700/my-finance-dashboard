@@ -2,7 +2,7 @@
 // 設定區：把下面這行換成你自己的 Apps Script 網頁應用程式網址
 // （部署教學裡的「步驟5」會教你怎麼拿到這個網址）
 // ===========================================================
-const API_URL = "https://script.google.com/macros/s/AKfycby66uIslo6fvhAl7esqroZedpIiztkDjpkqA130PuJFKw20Hfmqjjk0pWpoDQrpzIgY/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzNzx2T_0aRYMC61SyBRqzQHbFLDvd9TlJnWYrmJAWNd0pp4qE7-zwSIzLQPbBD6vD1/exec";
 
 // ---------- 顏色（跟 style.css 呼應） ----------
 const COLOR_SAGE = "#7C9473";
@@ -47,7 +47,16 @@ async function loadData() {
       "更新於 " + new Date(data.updatedAt).toLocaleString("zh-TW", { hour12: false });
   } catch (err) {
     console.error(err);
-    document.getElementById("loadError").classList.remove("hidden");
+    const box = document.getElementById("loadError");
+    box.classList.remove("hidden");
+    let detail = document.getElementById("loadErrorDetail");
+    if (!detail) {
+      detail = document.createElement("p");
+      detail.id = "loadErrorDetail";
+      detail.style.cssText = "font-size:12px;color:#C08552;word-break:break-all;margin-top:8px;";
+      box.appendChild(detail);
+    }
+    detail.textContent = "錯誤訊息：" + (err && err.message ? err.message : String(err));
   }
 }
 
