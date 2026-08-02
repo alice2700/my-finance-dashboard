@@ -106,18 +106,21 @@ async function loadData() {
       { data: balances, error: balErr },
       { data: txns, error: txnErr },
       { data: goalsRows, error: goalsErr },
+      { data: stockTxns, error: stockTxnErr },
     ] = await Promise.all([
       sb.from("category_map").select("id,item_name,type"),
       sb.from("asset_snapshots").select("year,month,cash_and_deposits,other_investments,stock_market_value").order("year").order("month"),
       sb.from("account_balances").select("account_name,account_type,balance,recorded_at").order("recorded_at"),
       sb.from("transactions").select("date,amount,type,category_id").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
+      sb.from("stock_transactions").select("trade_date,side,amount_twd").eq("side", "buy").limit(5000),
     ]);
     if (catErr) throw catErr;
     if (snapErr) throw snapErr;
     if (balErr) throw balErr;
     if (txnErr) throw txnErr;
     if (goalsErr) throw goalsErr;
+    if (stockTxnErr) throw stockTxnErr;
 
     const catMap = {};
     (categories || []).forEach((c) => { catMap[c.id] = c.item_name; });
@@ -224,6 +227,8 @@ async function loadData() {
 
       renderGoals(buildGoals(goalsRows && goalsRows[0], trend));
     }
+
+    renderStockInvested(stockTxns);
 
     document.getElementById("updatedAt").textContent =
       "更新於 " + new Date().toLocaleString("zh-TW", { hour12: false });
@@ -477,6 +482,29 @@ function renderGoals(goals) {
   document.getElementById("goalHouseTarget").textContent = fmt(goals.houseTarget);
   document.getElementById("goalHouseNote").textContent =
     goals.housePrice ? `房價目標約 ${goals.housePrice}萬` : "";
+}
+
+// ---------- 股票投入金額（stock_transactions，只算買進，不含賣出/除息） ----------
+function renderStockInvested(stockTxns) {
+  const el = document.getElementById("stockMonthInvested");
+  const note = document.getElementById("stockYearInvestedNote");
+  if (!el) return;
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  let monthTotal = 0;
+  let yearTotal = 0;
+  (stockTxns || []).forEach((t) => {
+    const y = parseInt(t.trade_date.slice(0, 4), 10);
+    const m = parseInt(t.trade_date.slice(5, 7), 10);
+    const amount = Number(t.amount_twd || 0);
+    if (y === year) {
+      yearTotal += amount;
+      if (m === month) monthTotal += amount;
+    }
+  });
+  el.textContent = fmt(monthTotal);
+  note.textContent = `${year}年累計投入 ${fmt(yearTotal)}`;
 }
 
 // ---------- 股票（維持原本的 Apps Script） ----------
