@@ -144,12 +144,24 @@ html, body {
   min-height: 16px;
 }
 .market-note {
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.6;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
+}
+.market-note-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 3px 0;
+}
+.market-note-row span:last-child { font-variant-numeric: tabular-nums; color: var(--ink); }
+.market-note-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  justify-content: flex-start;
+  padding-bottom: 6px;
 }
 
 .stat-card {

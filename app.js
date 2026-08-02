@@ -355,15 +355,18 @@ function renderAssetChart() {
 // 本月資產變化 − 本月結餘（存錢貢獻） = 市場漲跌等其他貢獻
 function renderMarketNote(trend) {
   const note = document.getElementById("marketContributionNote");
-  if (trend.length < 2) { note.textContent = ""; return; }
+  if (trend.length < 2) { note.innerHTML = ""; return; }
   const latest = trend[trend.length - 1];
   const prev = trend[trend.length - 2];
   const assetChange = latest.asset - prev.asset;
   const savings = latest.income - latest.expense;
   const marketPart = assetChange - savings;
-  note.textContent =
-    `${latest.year}/${latest.month} 資產變化 ${assetChange >= 0 ? "+" : ""}${fmt(assetChange)}，` +
-    `其中存下的錢貢獻 ${fmt(savings)}，其餘（市場漲跌等）貢獻 ${marketPart >= 0 ? "+" : ""}${fmt(marketPart)}`;
+  const sign = (n) => (n >= 0 ? "+" : "");
+  note.innerHTML = `
+    <div class="market-note-row market-note-title">${latest.year}/${latest.month} 資產變化 ${sign(assetChange)}${fmt(assetChange)}</div>
+    <div class="market-note-row"><span>存下的錢</span><span>${sign(savings)}${fmt(savings)}</span></div>
+    <div class="market-note-row"><span>其餘（市場漲跌等）</span><span>${sign(marketPart)}${fmt(marketPart)}</span></div>
+  `;
 }
 
 function renderBalanceChart() {
