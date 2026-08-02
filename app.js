@@ -132,21 +132,25 @@ async function loadData() {
       monthly[key][t.type] += Number(t.amount);
     });
 
-    // trend：舊資料讀 asset_snapshots（一整包在 cash，尚未拆分），
-    // 之後有記錄的月份改讀 account_balances（依帳戶 account_type 拆成現金/股票兩類）
+    // trend：舊資料讀 asset_snapshots（cash_and_deposits=活期、other_investments=定存、
+    // stock_market_value=股票，2024/2025 目前還沒拆分，全部在活期），
+    // 之後有記錄的月份改讀 account_balances（依帳戶 account_type 拆成活期/定存/股票三類）
     const snapshotMonths = new Set();
     const fromSnapshots = (snapshots || []).map((s) => {
       snapshotMonths.add(s.year + "-" + s.month);
       const key = s.year + "-" + s.month;
       const mo = monthly[key] || { income: 0, expense: 0 };
-      const cashPart = Number(s.cash_and_deposits || 0) + Number(s.other_investments || 0);
+      const activeDeposit = Number(s.cash_and_deposits || 0);
+      const timeDeposit = Number(s.other_investments || 0);
       const stockPart = Number(s.stock_market_value || 0);
       return {
         year: s.year,
         month: s.month,
         label: String(s.year).slice(2) + "/" + s.month,
-        asset: cashPart + stockPart,
-        cashPart,
+        asset: activeDeposit + timeDeposit + stockPart,
+        cashPart: activeDeposit + timeDeposit,
+        activeDeposit,
+        timeDeposit,
         stockPart,
         income: mo.income,
         expense: mo.expense,
@@ -154,6 +158,7 @@ async function loadData() {
     });
 
     // 每個帳戶在每個月取「當月最新一筆」餘額
+    // account_type：cash=活期存款、investment=定存/基金/儲蓄險等、stock=股票
     const latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
     (balances || []).forEach((b) => {
       const d = new Date(b.recorded_at);
@@ -169,19 +174,23 @@ async function loadData() {
       .filter((key) => !snapshotMonths.has(key))
       .map((key) => {
         const [y, m] = key.split("-").map(Number);
-        let cashPart = 0;
+        let activeDeposit = 0;
+        let timeDeposit = 0;
         let stockPart = 0;
         Object.values(latestByAccountMonth[key]).forEach((b) => {
           if (b.account_type === "stock") stockPart += Number(b.balance);
-          else cashPart += Number(b.balance);
+          else if (b.account_type === "investment") timeDeposit += Number(b.balance);
+          else activeDeposit += Number(b.balance);
         });
         const mo = monthly[key] || { income: 0, expense: 0 };
         return {
           year: y,
           month: m,
           label: String(y).slice(2) + "/" + m,
-          asset: cashPart + stockPart,
-          cashPart,
+          asset: activeDeposit + timeDeposit + stockPart,
+          cashPart: activeDeposit + timeDeposit,
+          activeDeposit,
+          timeDeposit,
           stockPart,
           income: mo.income,
           expense: mo.expense,
@@ -359,14 +368,15 @@ function renderMarketNote(trend) {
   const latest = trend[trend.length - 1];
   const prev = trend[trend.length - 2];
   const assetChange = latest.asset - prev.asset;
-  const savings = latest.income - latest.expense;
-  const marketPart = assetChange - savings;
   const sign = (n) => (n >= 0 ? "+" : "");
-  note.innerHTML = `
-    <div class="market-note-row market-note-title">${latest.year}/${latest.month} 資產變化 ${sign(assetChange)}${fmt(assetChange)}</div>
-    <div class="market-note-row"><span>存下的錢</span><span>${sign(savings)}${fmt(savings)}</span></div>
-    <div class="market-note-row"><span>其餘（市場漲跌等）</span><span>${sign(marketPart)}${fmt(marketPart)}</span></div>
-  `;
+  const rows = [
+    ["活期存款", latest.activeDeposit - prev.activeDeposit],
+    ["定期存款", latest.timeDeposit - prev.timeDeposit],
+    ["股票", latest.stockPart - prev.stockPart],
+  ];
+  note.innerHTML =
+    `<div class="market-note-row market-note-title">${latest.year}/${latest.month} 資產變化 ${sign(assetChange)}${fmt(assetChange)}</div>` +
+    rows.map(([label, v]) => `<div class="market-note-row"><span>${label}</span><span>${sign(v)}${fmt(v)}</span></div>`).join("");
 }
 
 function renderBalanceChart() {
