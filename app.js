@@ -204,27 +204,26 @@ async function loadData() {
 
     renderOverview(trend);
 
+    allTxns = txns || [];
+    allCatMap = catMap;
+    earliestTxnKey = null;
+    latestTxnKey = null;
+    let latestTxnYear = null;
+    let latestTxnMonth = null;
+    allTxns.forEach((t) => {
+      const y = parseInt(t.date.slice(0, 4), 10);
+      const m = parseInt(t.date.slice(5, 7), 10);
+      const key = y * 12 + m;
+      if (earliestTxnKey === null || key < earliestTxnKey) earliestTxnKey = key;
+      if (latestTxnKey === null || key > latestTxnKey) { latestTxnKey = key; latestTxnYear = y; latestTxnMonth = m; }
+    });
+    if (cashflowYear === null && latestTxnYear !== null) {
+      cashflowYear = latestTxnYear;
+      cashflowMonth = latestTxnMonth;
+    }
+    if (cashflowYear !== null) renderCashflowForMonth(cashflowYear, cashflowMonth);
+
     if (trend.length) {
-      const latest = trend[trend.length - 1];
-      const income = {};
-      const expense = {};
-      (txns || []).forEach((t) => {
-        const y = parseInt(t.date.slice(0, 4), 10);
-        const m = parseInt(t.date.slice(5, 7), 10);
-        if (y !== latest.year || m !== latest.month) return;
-        const name = catMap[t.category_id] || "未分類";
-        const bucket = t.type === "income" ? income : expense;
-        bucket[name] = (bucket[name] || 0) + Number(t.amount);
-      });
-      renderCashflow({
-        income: Object.keys(income).map((name) => ({ name, value: income[name] })),
-        expense: Object.keys(expense).map((name) => ({ name, value: expense[name] })),
-      });
-
-      const monthTag = latest.year + "/" + latest.month;
-      document.getElementById("labelIncomeFlow").textContent = monthTag + " 收入來源";
-      document.getElementById("labelExpenseFlow").textContent = monthTag + " 支出去向";
-
       renderGoals(buildGoals(goalsRows && goalsRows[0], trend));
     }
 
@@ -465,6 +464,56 @@ function renderCashflow(breakdown) {
   renderFlowList(document.getElementById("incomeFlow"), breakdown.income, "income");
   renderFlowList(document.getElementById("expenseFlow"), breakdown.expense, "expense");
 }
+
+// ---------- 現金流月份切換 ----------
+let allTxns = [];
+let allCatMap = {};
+let cashflowYear = null;
+let cashflowMonth = null;
+let earliestTxnKey = null;
+let latestTxnKey = null;
+
+function renderCashflowForMonth(year, month) {
+  cashflowYear = year;
+  cashflowMonth = month;
+  const income = {};
+  const expense = {};
+  allTxns.forEach((t) => {
+    const y = parseInt(t.date.slice(0, 4), 10);
+    const m = parseInt(t.date.slice(5, 7), 10);
+    if (y !== year || m !== month) return;
+    const name = allCatMap[t.category_id] || "未分類";
+    const bucket = t.type === "income" ? income : expense;
+    bucket[name] = (bucket[name] || 0) + Number(t.amount);
+  });
+  renderCashflow({
+    income: Object.keys(income).map((name) => ({ name, value: income[name] })),
+    expense: Object.keys(expense).map((name) => ({ name, value: expense[name] })),
+  });
+
+  const monthTag = year + "/" + month;
+  document.getElementById("labelIncomeFlow").textContent = monthTag + " 收入來源";
+  document.getElementById("labelExpenseFlow").textContent = monthTag + " 支出去向";
+  document.getElementById("cashflowMonthLabel").textContent = monthTag;
+
+  const key = year * 12 + month;
+  document.getElementById("cashflowPrevMonth").disabled = earliestTxnKey !== null && key <= earliestTxnKey;
+  document.getElementById("cashflowNextMonth").disabled = latestTxnKey !== null && key >= latestTxnKey;
+}
+
+document.getElementById("cashflowPrevMonth").addEventListener("click", () => {
+  let m = cashflowMonth - 1;
+  let y = cashflowYear;
+  if (m < 1) { m = 12; y -= 1; }
+  renderCashflowForMonth(y, m);
+});
+
+document.getElementById("cashflowNextMonth").addEventListener("click", () => {
+  let m = cashflowMonth + 1;
+  let y = cashflowYear;
+  if (m > 12) { m = 1; y += 1; }
+  renderCashflowForMonth(y, m);
+});
 
 // ---------- 長期目標 ----------
 function renderGoals(goals) {
