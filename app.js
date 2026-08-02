@@ -103,16 +103,19 @@ async function loadData() {
     const [
       { data: categories, error: catErr },
       { data: snapshots, error: snapErr },
+      { data: balances, error: balErr },
       { data: txns, error: txnErr },
       { data: goalsRows, error: goalsErr },
     ] = await Promise.all([
       sb.from("category_map").select("id,item_name,type"),
       sb.from("asset_snapshots").select("year,month,cash_and_deposits,other_investments,stock_market_value").order("year").order("month"),
+      sb.from("account_balances").select("account_name,account_type,balance,recorded_at").order("recorded_at"),
       sb.from("transactions").select("date,amount,type,category_id").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
     ]);
     if (catErr) throw catErr;
     if (snapErr) throw snapErr;
+    if (balErr) throw balErr;
     if (txnErr) throw txnErr;
     if (goalsErr) throw goalsErr;
 
@@ -129,22 +132,63 @@ async function loadData() {
       monthly[key][t.type] += Number(t.amount);
     });
 
-    // trend：以 asset_snapshots 為主，對應該月的收入/支出（等同原本 v_trend 的邏輯）
-    const trend = (snapshots || [])
-      .map((s) => {
-        const key = s.year + "-" + s.month;
+    // trend：舊資料讀 asset_snapshots（一整包在 cash，尚未拆分），
+    // 之後有記錄的月份改讀 account_balances（依帳戶 account_type 拆成現金/股票兩類）
+    const snapshotMonths = new Set();
+    const fromSnapshots = (snapshots || []).map((s) => {
+      snapshotMonths.add(s.year + "-" + s.month);
+      const key = s.year + "-" + s.month;
+      const mo = monthly[key] || { income: 0, expense: 0 };
+      const cashPart = Number(s.cash_and_deposits || 0) + Number(s.other_investments || 0);
+      const stockPart = Number(s.stock_market_value || 0);
+      return {
+        year: s.year,
+        month: s.month,
+        label: String(s.year).slice(2) + "/" + s.month,
+        asset: cashPart + stockPart,
+        cashPart,
+        stockPart,
+        income: mo.income,
+        expense: mo.expense,
+      };
+    });
+
+    // 每個帳戶在每個月取「當月最新一筆」餘額
+    const latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
+    (balances || []).forEach((b) => {
+      const d = new Date(b.recorded_at);
+      const key = d.getFullYear() + "-" + (d.getMonth() + 1);
+      if (!latestByAccountMonth[key]) latestByAccountMonth[key] = {};
+      const cur = latestByAccountMonth[key][b.account_name];
+      if (!cur || new Date(b.recorded_at) > new Date(cur.recorded_at)) {
+        latestByAccountMonth[key][b.account_name] = b;
+      }
+    });
+
+    const fromBalances = Object.keys(latestByAccountMonth)
+      .filter((key) => !snapshotMonths.has(key))
+      .map((key) => {
+        const [y, m] = key.split("-").map(Number);
+        let cashPart = 0;
+        let stockPart = 0;
+        Object.values(latestByAccountMonth[key]).forEach((b) => {
+          if (b.account_type === "stock") stockPart += Number(b.balance);
+          else cashPart += Number(b.balance);
+        });
         const mo = monthly[key] || { income: 0, expense: 0 };
-        const asset = Number(s.cash_and_deposits || 0) + Number(s.other_investments || 0) + Number(s.stock_market_value || 0);
         return {
-          year: s.year,
-          month: s.month,
-          label: String(s.year).slice(2) + "/" + s.month,
-          asset,
+          year: y,
+          month: m,
+          label: String(y).slice(2) + "/" + m,
+          asset: cashPart + stockPart,
+          cashPart,
+          stockPart,
           income: mo.income,
           expense: mo.expense,
         };
-      })
-      .sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+      });
+
+    const trend = fromSnapshots.concat(fromBalances).sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
 
     renderOverview(trend);
 
@@ -164,6 +208,10 @@ async function loadData() {
         income: Object.keys(income).map((name) => ({ name, value: income[name] })),
         expense: Object.keys(expense).map((name) => ({ name, value: expense[name] })),
       });
+
+      const monthTag = latest.year + "/" + latest.month;
+      document.getElementById("labelIncomeFlow").textContent = monthTag + " 收入來源";
+      document.getElementById("labelExpenseFlow").textContent = monthTag + " 支出去向";
 
       renderGoals(buildGoals(goalsRows && goalsRows[0], trend));
     }
@@ -221,48 +269,136 @@ function buildGoals(goalsRow, trend) {
 }
 
 // ---------- 總覽 ----------
+let overviewTrend = [];
+let assetSeries = "total"; // total | cash | stock
+let balanceRange = "12"; // 12 | all
+
 function renderOverview(trend) {
   if (!trend || !trend.length) return;
+  overviewTrend = trend;
   const latest = trend[trend.length - 1];
   const first = trend[0];
   const growth = first.asset ? (((latest.asset - first.asset) / first.asset) * 100).toFixed(0) : null;
+  const balance = latest.income - latest.expense;
+
+  const monthTag = latest.year + "/" + latest.month;
+  document.getElementById("labelAsset").textContent = monthTag + " 資產淨值";
+  document.getElementById("labelIncome").textContent = monthTag + " 收入";
+  document.getElementById("labelExpense").textContent = monthTag + " 生活支出";
+  document.getElementById("labelBalance").textContent = monthTag + " 結餘";
 
   document.getElementById("statAsset").textContent = fmt(latest.asset);
   document.getElementById("statAssetGrowth").textContent = growth !== null ? `累計成長 ${growth >= 0 ? "+" : ""}${growth}%` : "";
   document.getElementById("statIncome").textContent = fmt(latest.income);
   document.getElementById("statExpense").textContent = fmt(latest.expense);
+  document.getElementById("statBalance").textContent = fmt(balance);
+  const balanceCard = document.getElementById("balanceCard");
+  balanceCard.classList.remove("accent-income", "accent-expense");
+  balanceCard.classList.add(balance >= 0 ? "accent-income" : "accent-expense");
 
+  renderMarketNote(trend);
+  renderAssetChart();
+  renderBalanceChart();
+}
+
+function seriesValue(t, series) {
+  if (series === "cash") return t.cashPart;
+  if (series === "stock") return t.stockPart;
+  return t.asset;
+}
+
+function renderAssetChart() {
+  const trend = overviewTrend;
   const labels = trend.map((t) => t.label);
-
+  const canvas = document.getElementById("chartAsset");
   renderChart("asset", "chartAsset", {
     type: "line",
     data: {
       labels,
       datasets: [{
-        data: trend.map((t) => t.asset),
+        data: trend.map((t) => seriesValue(t, assetSeries)),
         borderColor: COLOR_SAGE,
         backgroundColor: "rgba(124,148,115,0.12)",
         fill: true,
         tension: 0.35,
         pointRadius: 0,
+        pointHitRadius: 20,
         borderWidth: 2,
       }],
     },
-    options: baseChartOptions(),
+    options: {
+      ...baseChartOptions(),
+      interaction: { mode: "index", intersect: false },
+      onHover: (evt, elements) => {
+        if (elements && elements.length) {
+          const t = trend[elements[0].index];
+          document.getElementById("assetHoverNote").textContent =
+            `${t.year}/${t.month}：${fmt(seriesValue(t, assetSeries))}`;
+        }
+      },
+    },
   });
+  const note = document.getElementById("assetHoverNote");
+  const resetNote = () => {
+    const latest = trend[trend.length - 1];
+    note.textContent = `${latest.year}/${latest.month}：${fmt(seriesValue(latest, assetSeries))}`;
+  };
+  resetNote();
+  canvas.onmouseleave = resetNote;
+  canvas.ontouchend = resetNote;
 
+  document.querySelectorAll("#assetSeriesToggle .segmented-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.series === assetSeries);
+  });
+}
+
+// 本月資產變化 − 本月結餘（存錢貢獻） = 市場漲跌等其他貢獻
+function renderMarketNote(trend) {
+  const note = document.getElementById("marketContributionNote");
+  if (trend.length < 2) { note.textContent = ""; return; }
+  const latest = trend[trend.length - 1];
+  const prev = trend[trend.length - 2];
+  const assetChange = latest.asset - prev.asset;
+  const savings = latest.income - latest.expense;
+  const marketPart = assetChange - savings;
+  note.textContent =
+    `${latest.year}/${latest.month} 資產變化 ${assetChange >= 0 ? "+" : ""}${fmt(assetChange)}，` +
+    `其中存下的錢貢獻 ${fmt(savings)}，其餘（市場漲跌等）貢獻 ${marketPart >= 0 ? "+" : ""}${fmt(marketPart)}`;
+}
+
+function renderBalanceChart() {
+  const trend = balanceRange === "12" ? overviewTrend.slice(-12) : overviewTrend;
+  const labels = trend.map((t) => t.label);
   renderChart("incomeExpense", "chartIncomeExpense", {
     type: "bar",
     data: {
       labels,
-      datasets: [
-        { label: "收入", data: trend.map((t) => t.income), backgroundColor: COLOR_SAGE, borderRadius: 3 },
-        { label: "支出", data: trend.map((t) => t.expense), backgroundColor: COLOR_CLAY, borderRadius: 3 },
-      ],
+      datasets: [{
+        data: trend.map((t) => t.income - t.expense),
+        backgroundColor: (ctx) => (ctx.raw >= 0 ? COLOR_SAGE : COLOR_CLAY),
+        borderRadius: 3,
+      }],
     },
-    options: baseChartOptions(true),
+    options: baseChartOptions(false),
+  });
+  document.querySelectorAll("#rangeToggle .segmented-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.range === balanceRange);
   });
 }
+
+document.getElementById("assetSeriesToggle").addEventListener("click", (e) => {
+  const btn = e.target.closest(".segmented-btn");
+  if (!btn) return;
+  assetSeries = btn.dataset.series;
+  renderAssetChart();
+});
+
+document.getElementById("rangeToggle").addEventListener("click", (e) => {
+  const btn = e.target.closest(".segmented-btn");
+  if (!btn) return;
+  balanceRange = btn.dataset.range;
+  renderBalanceChart();
+});
 
 function baseChartOptions(showLegend) {
   return {

@@ -40,27 +40,46 @@
     <section class="page" id="page-overview">
       <div class="stat-grid">
         <div class="stat-card">
-          <div class="stat-label">目前資產淨值</div>
+          <div class="stat-label" id="labelAsset">資產淨值</div>
           <div class="stat-value" id="statAsset">—</div>
           <div class="stat-sub" id="statAssetGrowth"></div>
         </div>
         <div class="stat-card accent-income">
-          <div class="stat-label">本月收入</div>
+          <div class="stat-label" id="labelIncome">收入</div>
           <div class="stat-value" id="statIncome">—</div>
         </div>
         <div class="stat-card accent-expense">
-          <div class="stat-label">本月生活支出</div>
+          <div class="stat-label" id="labelExpense">生活支出</div>
           <div class="stat-value" id="statExpense">—</div>
+        </div>
+        <div class="stat-card" id="balanceCard">
+          <div class="stat-label" id="labelBalance">結餘</div>
+          <div class="stat-value" id="statBalance">—</div>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-title">資產淨值走勢</div>
+        <div class="card-title-row">
+          <div class="card-title">資產淨值走勢</div>
+          <div class="segmented" id="assetSeriesToggle">
+            <button class="segmented-btn active" data-series="total">總資產</button>
+            <button class="segmented-btn" data-series="cash">現金</button>
+            <button class="segmented-btn" data-series="stock">股票</button>
+          </div>
+        </div>
         <canvas id="chartAsset" height="180"></canvas>
+        <div class="chart-hover-note" id="assetHoverNote"></div>
+        <div class="market-note" id="marketContributionNote"></div>
       </div>
 
       <div class="card">
-        <div class="card-title">每月收入 vs 生活支出</div>
+        <div class="card-title-row">
+          <div class="card-title">每月淨結餘</div>
+          <div class="segmented" id="rangeToggle">
+            <button class="segmented-btn active" data-range="12">近12月</button>
+            <button class="segmented-btn" data-range="all">全部</button>
+          </div>
+        </div>
         <canvas id="chartIncomeExpense" height="180"></canvas>
       </div>
     </section>
@@ -68,11 +87,11 @@
     <!-- ============ 現金流 ============ -->
     <section class="page hidden" id="page-cashflow">
       <div class="card">
-        <div class="card-title">本月收入來源</div>
+        <div class="card-title" id="labelIncomeFlow">收入來源</div>
         <div id="incomeFlow" class="flow-list"></div>
       </div>
       <div class="card">
-        <div class="card-title">本月支出去向</div>
+        <div class="card-title" id="labelExpenseFlow">支出去向</div>
         <div id="expenseFlow" class="flow-list"></div>
       </div>
     </section>
