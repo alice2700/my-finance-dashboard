@@ -5,7 +5,7 @@ const SUPABASE_URL = "https://xckrpkphbnvqvpkdaewu.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_jHKg1gM4WWf28V0Owv2iQw_v0Gn8oXy";
 
 // 股票分頁維持原本的 Apps Script（不搬進 Supabase）
-const STOCKS_API_URL = "https://script.google.com/macros/s/AKfycbzNzx2T_0aRYMC61SyBRqzQHbFLDvd9TlJnWYrmJAWNd0pp4qE7-zwSIzLQPbBD6vD1/exec";
+const STOCKS_API_URL = "https://script.google.com/macros/s/AKfycbxv8lbB_MtE1aOrvzfeyZ5UkwAYukqFrzP5VOIW9Rp4uR94RlD4KAwJ3b4VjS7Ud4EH/exec";
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -490,13 +490,9 @@ async function loadStocks() {
   }
 }
 
-// ticker 欄位目前是「代號 名稱」整串（例如「0050 元大台灣50」），從這裡自己切出代號；
-// name 欄位目前來源不可靠（跟股數對不起來），不使用。
 function parseStock(s) {
-  const raw = String(s.ticker || "");
-  const spaceIdx = raw.indexOf(" ");
-  const code = spaceIdx >= 0 ? raw.slice(0, spaceIdx) : raw;
-  const name = spaceIdx >= 0 ? raw.slice(spaceIdx + 1) : "";
+  const code = String(s.ticker || "");
+  const name = String(s.name || "").replace(code, "").trim();
   return { ...s, code, name, isTW: /^\d/.test(code) };
 }
 
