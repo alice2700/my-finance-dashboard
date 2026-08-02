@@ -490,18 +490,62 @@ async function loadStocks() {
   }
 }
 
-function renderStocks(stocks) {
-  const listEl = document.getElementById("stockList");
-  if (!stocks || !stocks.length) {
-    listEl.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚無資料，請確認股票分頁已加入「現價」欄位</span></div>';
+// ticker 欄位目前是「代號 名稱」整串（例如「0050 元大台灣50」），從這裡自己切出代號；
+// name 欄位目前來源不可靠（跟股數對不起來），不使用。
+function parseStock(s) {
+  const raw = String(s.ticker || "");
+  const spaceIdx = raw.indexOf(" ");
+  const code = spaceIdx >= 0 ? raw.slice(0, spaceIdx) : raw;
+  const name = spaceIdx >= 0 ? raw.slice(spaceIdx + 1) : "";
+  return { ...s, code, name, isTW: /^\d/.test(code) };
+}
+
+function renderStockTable(container, stocks, total) {
+  container.innerHTML = "";
+  if (!stocks.length) {
+    container.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚無資料</span></div>';
     return;
   }
-  const withValue = stocks.filter((s) => s.marketValue);
+  const sorted = [...stocks].sort((a, b) => (b.marketValue || 0) - (a.marketValue || 0));
+  sorted.forEach((s) => {
+    const pct = total && s.marketValue ? (s.marketValue / total) * 100 : 0;
+    const row = document.createElement("div");
+    row.className = "stock-row";
+    row.innerHTML = `
+      <div class="stock-row-top">
+        <span class="stock-code">${s.code}</span>
+        <span class="stock-name">${s.name}</span>
+        <span class="stock-value">${s.marketValue != null ? fmt(s.marketValue) : "價格無法取得"}</span>
+      </div>
+      <div class="stock-row-meta">
+        <span>${s.shares ? s.shares.toLocaleString("zh-TW") + " 股" : ""}${s.price && typeof s.price === "number" ? " · 現價 " + s.price : ""}</span>
+        <span>${s.marketValue != null ? pct.toFixed(1) + "%" : ""}</span>
+      </div>
+      <div class="flow-bar-track"><div class="flow-bar-fill income" style="width:${pct}%"></div></div>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function renderStocks(stocks) {
+  const twEl = document.getElementById("stockTableTW");
+  const usEl = document.getElementById("stockTableUS");
+  const summaryEl = document.getElementById("stocksSummary");
+  if (!stocks || !stocks.length) {
+    twEl.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚無資料，請確認股票分頁已加入「現價」欄位</span></div>';
+    usEl.innerHTML = "";
+    summaryEl.textContent = "";
+    return;
+  }
+  const parsed = stocks.map(parseStock);
+  const withValue = parsed.filter((s) => s.marketValue != null);
+  const total = withValue.reduce((sum, s) => sum + s.marketValue, 0);
+
   if (withValue.length) {
     renderChart("stocks", "chartStocks", {
       type: "doughnut",
       data: {
-        labels: withValue.map((s) => s.ticker),
+        labels: withValue.map((s) => s.code),
         datasets: [{ data: withValue.map((s) => s.marketValue), backgroundColor: PIE_COLORS, borderWidth: 2, borderColor: "#fff" }],
       },
       options: {
@@ -512,11 +556,10 @@ function renderStocks(stocks) {
       },
     });
   }
-  const items = stocks.map((s) => ({
-    name: `${s.ticker}${s.shares ? " · " + s.shares + "股" : ""}`,
-    value: s.marketValue || 0,
-  }));
-  renderFlowList(listEl, items, "income");
+  summaryEl.textContent = "總市值 " + fmt(total);
+
+  renderStockTable(twEl, parsed.filter((s) => s.isTW), total);
+  renderStockTable(usEl, parsed.filter((s) => !s.isTW), total);
 }
 
 initAuth();
