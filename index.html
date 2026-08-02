@@ -12,15 +12,29 @@
 <meta name="apple-mobile-web-app-title" content="理財誌" />
 <link rel="stylesheet" href="style.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
   <header class="topbar">
     <div class="topbar-title">理財誌</div>
     <div class="topbar-updated" id="updatedAt">尚未載入資料</div>
+    <button id="logoutBtn" class="logout-btn hidden">登出</button>
   </header>
 
-  <main id="app">
+  <section id="page-login">
+    <div class="card login-card">
+      <div class="card-title">登入</div>
+      <form id="loginForm">
+        <input type="email" id="loginEmail" placeholder="Email" autocomplete="username" required />
+        <input type="password" id="loginPassword" placeholder="密碼" autocomplete="current-password" required />
+        <button type="submit" id="loginSubmit">登入</button>
+        <p id="loginError" class="login-error hidden"></p>
+      </form>
+    </div>
+  </section>
+
+  <main id="app" class="hidden">
 
     <!-- ============ 總覽 ============ -->
     <section class="page" id="page-overview">
@@ -96,12 +110,12 @@
 
     <div id="loadError" class="card error hidden">
       <div class="card-title">無法載入資料</div>
-      <p>請確認 <code>app.js</code> 裡的 <code>API_URL</code> 已經設定成你的 Apps Script 網頁應用程式網址。</p>
+      <p id="loadErrorDetail"></p>
     </div>
 
   </main>
 
-  <nav class="tabbar">
+  <nav class="tabbar hidden">
     <button class="tab active" data-page="overview">
       <span>總覽</span>
     </button>

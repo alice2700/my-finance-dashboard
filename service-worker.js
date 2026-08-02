@@ -1,4 +1,4 @@
-const CACHE_NAME = 'licaizhi-v1';
+const CACHE_NAME = 'licaizhi-v2';
 const APP_SHELL = [
   './index.html',
   './style.css',
@@ -24,10 +24,10 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// App shell: cache-first. API calls (to script.google.com): network-first so data stays fresh.
+// App shell: cache-first. API calls (Apps Script + Supabase): network-first so data stays fresh.
 self.addEventListener('fetch', (event) => {
   const url = event.request.url;
-  if (url.indexOf('script.google.com') >= 0) {
+  if (url.indexOf('script.google.com') >= 0 || url.indexOf('supabase.co') >= 0) {
     event.respondWith(
       fetch(event.request).catch(() => caches.match(event.request))
     );
