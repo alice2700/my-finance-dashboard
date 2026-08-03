@@ -113,7 +113,7 @@ async function loadData() {
       sb.from("account_balances").select("account_name,account_type,balance,recorded_at").order("recorded_at"),
       sb.from("transactions").select("date,amount,type,category_id,note").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
-      sb.from("stock_transactions").select("trade_date,side,amount_twd").eq("side", "buy").limit(5000),
+      sb.from("stock_transactions").select("ticker,market,stock_name,trade_date,side,shares,amount_twd").limit(5000),
     ]);
     if (catErr) throw catErr;
     if (snapErr) throw snapErr;
@@ -201,6 +201,18 @@ async function loadData() {
       });
 
     const trend = fromSnapshots.concat(fromBalances).sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+
+    // 每個帳戶「不分月份」的最新一筆餘額，用來當股票市值來源
+    // （目前主要用於 GOOGLEFINANCE 抓不到價格的標的，帳戶名稱要記得跟股票代號一致）
+    latestBalanceByAccount = {};
+    (balances || []).forEach((b) => {
+      const cur = latestBalanceByAccount[b.account_name];
+      if (!cur || new Date(b.recorded_at) > new Date(cur.recorded_at)) {
+        latestBalanceByAccount[b.account_name] = b;
+      }
+    });
+
+    stockPositions = buildStockPositions(stockTxns || [], txns || [], catMap);
 
     renderOverview(trend);
 
@@ -668,7 +680,7 @@ function renderStockInvested(stockTxns) {
   const month = now.getMonth() + 1;
   let monthTotal = 0;
   let yearTotal = 0;
-  (stockTxns || []).forEach((t) => {
+  (stockTxns || []).filter((t) => t.side === "buy").forEach((t) => {
     const y = parseInt(t.trade_date.slice(0, 4), 10);
     const m = parseInt(t.trade_date.slice(5, 7), 10);
     const amount = Number(t.amount_twd || 0);
@@ -681,7 +693,52 @@ function renderStockInvested(stockTxns) {
   note.textContent = `${year}年累計投入 ${fmt(yearTotal)}`;
 }
 
-// ---------- 股票（維持原本的 Apps Script） ----------
+// ---------- 股票均價/損益（加權平均成本法，現金股利不影響成本，另外算總報酬） ----------
+let stockPositions = {};
+let latestBalanceByAccount = {};
+const DIVIDEND_CATEGORY_ID = 3; // category_map 裡「現金股利」固定是 id=3
+
+function buildStockPositions(stockTxns, txns, catMap) {
+  const positions = {};
+  [...stockTxns]
+    .filter((t) => t.side === "buy" || t.side === "sell")
+    .sort((a, b) => (a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0))
+    .forEach((t) => {
+      if (!positions[t.ticker]) {
+        positions[t.ticker] = { market: t.market, name: t.stock_name, shares: 0, costBasis: 0, realizedGain: 0 };
+      }
+      const p = positions[t.ticker];
+      const amt = Number(t.amount_twd || 0);
+      const shares = Number(t.shares || 0);
+      if (t.side === "buy") {
+        p.shares += shares;
+        p.costBasis += amt;
+      } else {
+        const avgCost = p.shares > 0 ? p.costBasis / p.shares : 0;
+        const soldCost = avgCost * shares;
+        p.realizedGain += amt - soldCost;
+        p.shares -= shares;
+        p.costBasis -= soldCost;
+      }
+    });
+
+  // 累計現金股利：transactions 表「現金股利」分類，備註對到股票代號（不影響成本，只用來算含股利總報酬）
+  const dividends = {};
+  (txns || []).forEach((t) => {
+    if (t.category_id !== DIVIDEND_CATEGORY_ID) return;
+    const key = (t.note || "").trim().toUpperCase();
+    if (!key) return;
+    dividends[key] = (dividends[key] || 0) + Number(t.amount);
+  });
+
+  Object.keys(positions).forEach((ticker) => {
+    positions[ticker].dividends = dividends[ticker.toUpperCase()] || 0;
+  });
+
+  return positions;
+}
+
+// ---------- 股票（現價維持原本的 Apps Script） ----------
 async function loadStocks() {
   try {
     const res = await fetch(STOCKS_API_URL);
@@ -698,6 +755,28 @@ function parseStock(s) {
   return { ...s, code, name, isTW: /^\d/.test(code) };
 }
 
+// 把 Apps Script 抓到的現價資料，跟 stock_transactions 算出來的均價/成本/損益合併
+function enrichWithPosition(stock) {
+  const pos = stockPositions[stock.code];
+  if (!pos) return stock;
+  const avgCost = pos.shares > 0 ? pos.costBasis / pos.shares : null;
+  const marketValue = stock.marketValue != null
+    ? stock.marketValue
+    : (latestBalanceByAccount[stock.code] ? Number(latestBalanceByAccount[stock.code].balance) : null);
+  const unrealizedGain = marketValue != null && pos.shares > 0 ? marketValue - pos.costBasis : null;
+  const totalReturn = unrealizedGain != null ? unrealizedGain + pos.realizedGain + pos.dividends : null;
+  return {
+    ...stock,
+    marketValue,
+    avgCost,
+    costBasis: pos.costBasis,
+    realizedGain: pos.realizedGain,
+    dividends: pos.dividends,
+    unrealizedGain,
+    totalReturn,
+  };
+}
+
 function renderStockTable(container, stocks, total) {
   container.innerHTML = "";
   if (!stocks.length) {
@@ -707,19 +786,32 @@ function renderStockTable(container, stocks, total) {
   const sorted = [...stocks].sort((a, b) => (b.marketValue || 0) - (a.marketValue || 0));
   sorted.forEach((s) => {
     const pct = total && s.marketValue ? (s.marketValue / total) * 100 : 0;
+    const sign = (n) => (n >= 0 ? "+" : "");
+    let gainHtml = "";
+    if (s.unrealizedGain != null) {
+      const gainPct = s.costBasis ? (s.unrealizedGain / s.costBasis) * 100 : 0;
+      const cls = s.unrealizedGain >= 0 ? "gain-pos" : "gain-neg";
+      gainHtml = `<div class="stock-gain-row">
+        <span class="${cls}">資本利得 ${sign(s.unrealizedGain)}${fmt(s.unrealizedGain)}（${sign(gainPct)}${gainPct.toFixed(1)}%）</span>
+        ${s.dividends || s.realizedGain ? `<span class="gain-muted">含股利/已實現總報酬 ${sign(s.totalReturn)}${fmt(s.totalReturn)}</span>` : ""}
+      </div>`;
+    } else if (s.costBasis) {
+      gainHtml = `<div class="stock-gain-row"><span class="gain-muted">成本 ${fmt(s.costBasis)} · 尚無市值資料</span></div>`;
+    }
     const row = document.createElement("div");
     row.className = "stock-row";
     row.innerHTML = `
       <div class="stock-row-top">
         <span class="stock-code">${s.code}</span>
         <span class="stock-name">${s.name}</span>
-        <span class="stock-value">${s.marketValue != null ? fmt(s.marketValue) : "價格無法取得"}</span>
+        <span class="stock-value">${s.marketValue != null ? fmt(s.marketValue) : "尚無市值資料"}</span>
       </div>
       <div class="stock-row-meta">
-        <span>${s.shares ? s.shares.toLocaleString("zh-TW") + " 股" : ""}${s.price && typeof s.price === "number" ? " · 現價 " + s.price : ""}</span>
+        <span>${s.shares ? Number(s.shares).toLocaleString("zh-TW") + " 股" : ""}${s.avgCost != null ? " · 均價 " + s.avgCost.toFixed(2) : ""}</span>
         <span>${s.marketValue != null ? pct.toFixed(1) + "%" : ""}</span>
       </div>
       <div class="flow-bar-track"><div class="flow-bar-fill income" style="width:${pct}%"></div></div>
+      ${gainHtml}
     `;
     container.appendChild(row);
   });
@@ -729,15 +821,35 @@ function renderStocks(stocks) {
   const twEl = document.getElementById("stockTableTW");
   const usEl = document.getElementById("stockTableUS");
   const summaryEl = document.getElementById("stocksSummary");
-  if (!stocks || !stocks.length) {
+
+  const fromApi = (stocks || []).map(parseStock);
+  const apiCodes = new Set(fromApi.map((s) => s.code));
+
+  // stockPositions 裡有、但 Apps Script 沒回傳現價的（目前主要是美股），另外補一列進來
+  const extra = Object.keys(stockPositions)
+    .filter((ticker) => !apiCodes.has(ticker) && stockPositions[ticker].shares > 0.0001)
+    .map((ticker) => {
+      const pos = stockPositions[ticker];
+      const marketValue = latestBalanceByAccount[ticker] ? Number(latestBalanceByAccount[ticker].balance) : null;
+      return {
+        ticker, code: ticker, name: pos.name || "", shares: pos.shares, price: null,
+        marketValue, isTW: pos.market === "TW",
+      };
+    });
+
+  const merged = fromApi.concat(extra).map(enrichWithPosition);
+
+  if (!merged.length) {
     twEl.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚無資料，請確認股票分頁已加入「現價」欄位</span></div>';
     usEl.innerHTML = "";
     summaryEl.textContent = "";
     return;
   }
-  const parsed = stocks.map(parseStock);
-  const withValue = parsed.filter((s) => s.marketValue != null);
+
+  const withValue = merged.filter((s) => s.marketValue != null);
   const total = withValue.reduce((sum, s) => sum + s.marketValue, 0);
+  const totalUnrealized = merged.reduce((sum, s) => sum + (s.unrealizedGain || 0), 0);
+  const totalRealized = merged.reduce((sum, s) => sum + (s.realizedGain || 0), 0);
 
   if (withValue.length) {
     renderChart("stocks", "chartStocks", {
@@ -754,10 +866,13 @@ function renderStocks(stocks) {
       },
     });
   }
-  summaryEl.textContent = "總市值 " + fmt(total);
+  const sign = (n) => (n >= 0 ? "+" : "");
+  summaryEl.textContent =
+    `總市值 ${fmt(total)} ｜ 未實現損益 ${sign(totalUnrealized)}${fmt(totalUnrealized)}` +
+    (totalRealized ? ` ｜ 已實現損益 ${sign(totalRealized)}${fmt(totalRealized)}` : "");
 
-  renderStockTable(twEl, parsed.filter((s) => s.isTW), total);
-  renderStockTable(usEl, parsed.filter((s) => !s.isTW), total);
+  renderStockTable(twEl, merged.filter((s) => s.isTW), total);
+  renderStockTable(usEl, merged.filter((s) => !s.isTW), total);
 }
 
 initAuth();

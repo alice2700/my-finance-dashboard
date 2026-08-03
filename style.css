@@ -376,6 +376,17 @@ html, body {
   color: var(--muted);
   margin: 3px 0 5px;
 }
+.stock-gain-row {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  margin-top: 6px;
+}
+.gain-pos { color: var(--sage); font-weight: 600; }
+.gain-neg { color: var(--clay); font-weight: 600; }
+.gain-muted { color: var(--muted); }
 
 .card.error { border-color: var(--clay); }
 .card.error code {
