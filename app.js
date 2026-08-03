@@ -108,10 +108,10 @@ async function loadData() {
       { data: goalsRows, error: goalsErr },
       { data: stockTxns, error: stockTxnErr },
     ] = await Promise.all([
-      sb.from("category_map").select("id,item_name,type"),
+      sb.from("category_map").select("id,item_name,mid_name,type"),
       sb.from("asset_snapshots").select("year,month,cash_and_deposits,other_investments,stock_market_value").order("year").order("month"),
       sb.from("account_balances").select("account_name,account_type,balance,recorded_at").order("recorded_at"),
-      sb.from("transactions").select("date,amount,type,category_id").limit(5000),
+      sb.from("transactions").select("date,amount,type,category_id,note").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
       sb.from("stock_transactions").select("trade_date,side,amount_twd").eq("side", "buy").limit(5000),
     ]);
@@ -123,7 +123,7 @@ async function loadData() {
     if (stockTxnErr) throw stockTxnErr;
 
     const catMap = {};
-    (categories || []).forEach((c) => { catMap[c.id] = c.item_name; });
+    (categories || []).forEach((c) => { catMap[c.id] = { item_name: c.item_name, mid_name: c.mid_name || "未分類" }; });
 
     // 依年/月彙總每個月的收入、支出
     const monthly = {};
@@ -208,20 +208,21 @@ async function loadData() {
     allCatMap = catMap;
     earliestTxnKey = null;
     latestTxnKey = null;
-    let latestTxnYear = null;
+    earliestTxnYear = null;
+    latestTxnYear = null;
     let latestTxnMonth = null;
     allTxns.forEach((t) => {
       const y = parseInt(t.date.slice(0, 4), 10);
       const m = parseInt(t.date.slice(5, 7), 10);
       const key = y * 12 + m;
-      if (earliestTxnKey === null || key < earliestTxnKey) earliestTxnKey = key;
+      if (earliestTxnKey === null || key < earliestTxnKey) { earliestTxnKey = key; earliestTxnYear = y; }
       if (latestTxnKey === null || key > latestTxnKey) { latestTxnKey = key; latestTxnYear = y; latestTxnMonth = m; }
     });
     if (cashflowYear === null && latestTxnYear !== null) {
       cashflowYear = latestTxnYear;
       cashflowMonth = latestTxnMonth;
     }
-    if (cashflowYear !== null) renderCashflowForMonth(cashflowYear, cashflowMonth);
+    if (cashflowYear !== null) renderCashflowView();
 
     if (trend.length) {
       renderGoals(buildGoals(goalsRows && goalsRows[0], trend));
@@ -436,83 +437,169 @@ function baseChartOptions(showLegend) {
 }
 
 // ---------- 現金流 ----------
-function renderFlowList(container, items, kind) {
+// 把一個期間內的交易，依 大類(mid_name) -> 中類(item_name) -> 逐筆 分組，
+// 各層都用金額由大到小排序，percent 一律相對於該期間、該收支方向的總額
+function buildFlowHierarchy(txnList, catInfo) {
+  const groups = {};
+  let total = 0;
+  txnList.forEach((t) => {
+    const info = catInfo[t.category_id] || { item_name: "未分類", mid_name: "未分類" };
+    const amt = Number(t.amount);
+    total += amt;
+    if (!groups[info.mid_name]) groups[info.mid_name] = { value: 0, items: {} };
+    const g = groups[info.mid_name];
+    g.value += amt;
+    if (!g.items[info.item_name]) g.items[info.item_name] = { value: 0, txns: [] };
+    const it = g.items[info.item_name];
+    it.value += amt;
+    it.txns.push({ date: t.date, note: t.note, amount: amt });
+  });
+  return Object.keys(groups)
+    .map((name) => {
+      const g = groups[name];
+      const items = Object.keys(g.items)
+        .map((iname) => {
+          const it = g.items[iname];
+          it.txns.sort((a, b) => b.amount - a.amount);
+          return { name: iname, value: it.value, percent: total ? (it.value / total) * 100 : 0, txns: it.txns };
+        })
+        .sort((a, b) => b.value - a.value);
+      return { name, value: g.value, percent: total ? (g.value / total) * 100 : 0, items };
+    })
+    .sort((a, b) => b.value - a.value);
+}
+
+function renderFlowHierarchy(container, groups, kind) {
   container.innerHTML = "";
-  if (!items || !items.length) {
+  if (!groups.length) {
     container.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚無資料</span></div>';
     return;
   }
-  const sorted = [...items].sort((a, b) => b.value - a.value);
-  const max = sorted[0].value;
-  sorted.forEach((item) => {
-    const row = document.createElement("div");
-    row.className = "flow-item";
-    row.innerHTML = `
-      <div class="flow-item-top">
-        <span class="flow-item-name">${item.name}</span>
-        <span class="flow-item-value">${fmt(item.value)}</span>
-      </div>
-      <div class="flow-bar-track">
-        <div class="flow-bar-fill ${kind}" style="width:${max ? (item.value / max) * 100 : 0}%"></div>
-      </div>`;
-    container.appendChild(row);
+  const maxGroup = groups[0].value;
+  groups.forEach((g) => {
+    const groupEl = document.createElement("div");
+    groupEl.className = "flow-group";
+    groupEl.innerHTML = `
+      <button class="flow-group-header">
+        <span class="flow-group-name"><span class="flow-caret">▸</span>${g.name}</span>
+        <span class="flow-group-value">${fmt(g.value)}（${g.percent.toFixed(1)}%）</span>
+      </button>
+      <div class="flow-bar-track"><div class="flow-bar-fill ${kind}" style="width:${maxGroup ? (g.value / maxGroup) * 100 : 0}%"></div></div>
+      <div class="flow-group-body"></div>
+    `;
+    const header = groupEl.querySelector(".flow-group-header");
+    const body = groupEl.querySelector(".flow-group-body");
+    header.addEventListener("click", () => {
+      header.classList.toggle("expanded");
+      body.classList.toggle("expanded");
+    });
+
+    const maxItem = g.items[0].value;
+    g.items.forEach((it) => {
+      const itemEl = document.createElement("div");
+      itemEl.className = "flow-item-group";
+      itemEl.innerHTML = `
+        <button class="flow-item-header">
+          <span class="flow-item-name-cell"><span class="flow-caret">▸</span>${it.name}</span>
+          <span class="flow-item-value-cell">${fmt(it.value)}（${it.percent.toFixed(1)}%）</span>
+        </button>
+        <div class="flow-bar-track"><div class="flow-bar-fill ${kind}" style="width:${maxItem ? (it.value / maxItem) * 100 : 0}%"></div></div>
+        <div class="flow-item-body"></div>
+      `;
+      const itemHeader = itemEl.querySelector(".flow-item-header");
+      const itemBody = itemEl.querySelector(".flow-item-body");
+      itemHeader.addEventListener("click", () => {
+        itemHeader.classList.toggle("expanded");
+        itemBody.classList.toggle("expanded");
+      });
+      it.txns.forEach((tx) => {
+        const row = document.createElement("div");
+        row.className = "flow-tx-row";
+        row.innerHTML = `<span class="flow-tx-date">${tx.date.slice(5)}</span><span class="flow-tx-note">${tx.note || ""}</span><span class="flow-tx-amount">${fmt(tx.amount)}</span>`;
+        itemBody.appendChild(row);
+      });
+      body.appendChild(itemEl);
+    });
+    container.appendChild(groupEl);
   });
 }
 
 function renderCashflow(breakdown) {
   if (!breakdown) return;
-  renderFlowList(document.getElementById("incomeFlow"), breakdown.income, "income");
-  renderFlowList(document.getElementById("expenseFlow"), breakdown.expense, "expense");
+  renderFlowHierarchy(document.getElementById("incomeFlow"), breakdown.income, "income");
+  renderFlowHierarchy(document.getElementById("expenseFlow"), breakdown.expense, "expense");
 }
 
-// ---------- 現金流月份切換 ----------
+// ---------- 現金流：月/年 切換 ----------
 let allTxns = [];
 let allCatMap = {};
 let cashflowYear = null;
 let cashflowMonth = null;
+let cashflowRange = "month"; // month | year
 let earliestTxnKey = null;
 let latestTxnKey = null;
+let earliestTxnYear = null;
+let latestTxnYear = null;
 
-function renderCashflowForMonth(year, month) {
-  cashflowYear = year;
-  cashflowMonth = month;
-  const income = {};
-  const expense = {};
+function renderCashflowView() {
+  const income = [];
+  const expense = [];
   allTxns.forEach((t) => {
     const y = parseInt(t.date.slice(0, 4), 10);
     const m = parseInt(t.date.slice(5, 7), 10);
-    if (y !== year || m !== month) return;
-    const name = allCatMap[t.category_id] || "未分類";
-    const bucket = t.type === "income" ? income : expense;
-    bucket[name] = (bucket[name] || 0) + Number(t.amount);
+    if (y !== cashflowYear) return;
+    if (cashflowRange === "month" && m !== cashflowMonth) return;
+    (t.type === "income" ? income : expense).push(t);
   });
   renderCashflow({
-    income: Object.keys(income).map((name) => ({ name, value: income[name] })),
-    expense: Object.keys(expense).map((name) => ({ name, value: expense[name] })),
+    income: buildFlowHierarchy(income, allCatMap),
+    expense: buildFlowHierarchy(expense, allCatMap),
   });
 
-  const monthTag = year + "/" + month;
-  document.getElementById("labelIncomeFlow").textContent = monthTag + " 收入來源";
-  document.getElementById("labelExpenseFlow").textContent = monthTag + " 支出去向";
-  document.getElementById("cashflowMonthLabel").textContent = monthTag;
+  const periodTag = cashflowRange === "month" ? cashflowYear + "/" + cashflowMonth : cashflowYear + "年";
+  document.getElementById("labelIncomeFlow").textContent = periodTag + " 收入來源";
+  document.getElementById("labelExpenseFlow").textContent = periodTag + " 支出去向";
+  document.getElementById("cashflowMonthLabel").textContent = periodTag;
 
-  const key = year * 12 + month;
-  document.getElementById("cashflowPrevMonth").disabled = earliestTxnKey !== null && key <= earliestTxnKey;
-  document.getElementById("cashflowNextMonth").disabled = latestTxnKey !== null && key >= latestTxnKey;
+  if (cashflowRange === "month") {
+    const key = cashflowYear * 12 + cashflowMonth;
+    document.getElementById("cashflowPrevMonth").disabled = earliestTxnKey !== null && key <= earliestTxnKey;
+    document.getElementById("cashflowNextMonth").disabled = latestTxnKey !== null && key >= latestTxnKey;
+  } else {
+    document.getElementById("cashflowPrevMonth").disabled = earliestTxnYear !== null && cashflowYear <= earliestTxnYear;
+    document.getElementById("cashflowNextMonth").disabled = latestTxnYear !== null && cashflowYear >= latestTxnYear;
+  }
+
+  document.querySelectorAll("#cashflowRangeToggle .segmented-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.range === cashflowRange);
+  });
 }
 
 document.getElementById("cashflowPrevMonth").addEventListener("click", () => {
-  let m = cashflowMonth - 1;
-  let y = cashflowYear;
-  if (m < 1) { m = 12; y -= 1; }
-  renderCashflowForMonth(y, m);
+  if (cashflowRange === "year") {
+    cashflowYear -= 1;
+  } else {
+    cashflowMonth -= 1;
+    if (cashflowMonth < 1) { cashflowMonth = 12; cashflowYear -= 1; }
+  }
+  renderCashflowView();
 });
 
 document.getElementById("cashflowNextMonth").addEventListener("click", () => {
-  let m = cashflowMonth + 1;
-  let y = cashflowYear;
-  if (m > 12) { m = 1; y += 1; }
-  renderCashflowForMonth(y, m);
+  if (cashflowRange === "year") {
+    cashflowYear += 1;
+  } else {
+    cashflowMonth += 1;
+    if (cashflowMonth > 12) { cashflowMonth = 1; cashflowYear += 1; }
+  }
+  renderCashflowView();
+});
+
+document.getElementById("cashflowRangeToggle").addEventListener("click", (e) => {
+  const btn = e.target.closest(".segmented-btn");
+  if (!btn || !allTxns.length) return;
+  cashflowRange = btn.dataset.range;
+  renderCashflowView();
 });
 
 // ---------- 長期目標 ----------

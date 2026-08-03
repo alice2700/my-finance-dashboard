@@ -87,9 +87,13 @@
     <!-- ============ 現金流 ============ -->
     <section class="page hidden" id="page-cashflow">
       <div class="month-nav">
-        <button id="cashflowPrevMonth" class="month-nav-btn" aria-label="上個月">‹</button>
+        <button id="cashflowPrevMonth" class="month-nav-btn" aria-label="上一個">‹</button>
         <span id="cashflowMonthLabel">—</span>
-        <button id="cashflowNextMonth" class="month-nav-btn" aria-label="下個月">›</button>
+        <button id="cashflowNextMonth" class="month-nav-btn" aria-label="下一個">›</button>
+        <div class="segmented" id="cashflowRangeToggle">
+          <button class="segmented-btn active" data-range="month">月</button>
+          <button class="segmented-btn" data-range="year">年</button>
+        </div>
       </div>
       <div class="card">
         <div class="card-title" id="labelIncomeFlow">收入來源</div>
