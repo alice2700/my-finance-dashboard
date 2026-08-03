@@ -226,6 +226,7 @@ async function loadData() {
 
     if (trend.length) {
       renderGoals(buildGoals(goalsRows && goalsRows[0], trend));
+      renderYearlyReview(trend, allTxns, goalsRows && goalsRows[0]);
     }
 
     renderStockInvested(stockTxns);
@@ -618,6 +619,43 @@ function renderGoals(goals) {
   document.getElementById("goalHouseTarget").textContent = fmt(goals.houseTarget);
   document.getElementById("goalHouseNote").textContent =
     goals.housePrice ? `房價目標約 ${goals.housePrice}萬` : "";
+
+  document.querySelectorAll("#fireMilestones .milestone-badge").forEach((b) => {
+    b.classList.toggle("achieved", pct >= Number(b.dataset.milestone));
+  });
+}
+
+// ---------- 連續正結餘 / 年度儲蓄達成率 ----------
+function renderYearlyReview(trend, txns, goalsRow) {
+  let streak = 0;
+  for (let i = trend.length - 1; i >= 0; i--) {
+    if (trend[i].income - trend[i].expense >= 0) streak++;
+    else break;
+  }
+  document.getElementById("positiveStreakValue").textContent = streak + " 個月";
+  document.getElementById("positiveStreakNote").textContent = streak > 0
+    ? `最近連續 ${streak} 個月收入大於支出（含本月）`
+    : "最近一個月是負結餘，還沒開始累積";
+
+  const year = new Date().getFullYear();
+  let income = 0;
+  let expense = 0;
+  txns.forEach((t) => {
+    if (parseInt(t.date.slice(0, 4), 10) !== year) return;
+    if (t.type === "income") income += Number(t.amount);
+    else expense += Number(t.amount);
+  });
+  const actualRatio = income ? ((income - expense) / income) * 100 : 0;
+  const targetRatio = goalsRow && goalsRow.savings_invest_pct_target != null
+    ? Number(goalsRow.savings_invest_pct_target) * 100
+    : null;
+  document.getElementById("savingsRateActual").textContent = actualRatio.toFixed(1) + "%";
+  document.getElementById("savingsRateTarget").textContent =
+    targetRatio != null ? "目標 " + targetRatio.toFixed(0) + "%" : "尚未設定目標";
+  const pct = targetRatio ? Math.max(0, Math.min(100, (actualRatio / targetRatio) * 100)) : 0;
+  document.getElementById("savingsRateBar").style.width = pct.toFixed(1) + "%";
+  document.getElementById("savingsRateNote").textContent =
+    `${year}年至今，收入 ${fmt(income)}，支出 ${fmt(expense)}`;
 }
 
 // ---------- 股票投入金額（stock_transactions，只算買進，不含賣出/除息） ----------
