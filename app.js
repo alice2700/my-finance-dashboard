@@ -147,8 +147,10 @@ async function loadData() {
     (categories || []).forEach((c) => { catMap[c.id] = { item_name: c.item_name, mid_name: c.mid_name || "未分類" }; });
 
     // 依年/月彙總每個月的收入、支出
+    // 待銷帳（is_pending）的收入/支出不算「真正的」收支，一律排除在所有統計之外
     const monthly = {};
     (txns || []).forEach((t) => {
+      if (t.is_pending) return;
       const y = parseInt(t.date.slice(0, 4), 10);
       const m = parseInt(t.date.slice(5, 7), 10);
       const key = y + "-" + m;
@@ -580,6 +582,7 @@ function renderCashflowView() {
   const income = [];
   const expense = [];
   allTxns.forEach((t) => {
+    if (t.is_pending) return;
     const y = parseInt(t.date.slice(0, 4), 10);
     const m = parseInt(t.date.slice(5, 7), 10);
     if (y !== cashflowYear) return;
@@ -631,7 +634,7 @@ function renderBudgetStatus() {
       for (let m = 1; m <= elapsedMonths; m++) accrued += g.amounts[year + "-" + m] || 0;
       let actual = 0;
       allTxns.forEach((t) => {
-        if (t.type !== "expense" || t.is_special) return;
+        if (t.type !== "expense" || t.is_special || t.is_pending) return;
         if (!g.categoryIds.includes(t.category_id)) return;
         if (parseInt(t.date.slice(0, 4), 10) !== year) return;
         actual += Number(t.amount);
@@ -649,7 +652,7 @@ function renderBudgetStatus() {
     months.forEach((m) => { budget += g.amounts[cashflowYear + "-" + m] || 0; });
     let actual = 0;
     allTxns.forEach((t) => {
-      if (t.type !== "expense") return;
+      if (t.type !== "expense" || t.is_pending) return;
       if (!g.categoryIds.includes(t.category_id)) return;
       const y = parseInt(t.date.slice(0, 4), 10);
       const m = parseInt(t.date.slice(5, 7), 10);
@@ -733,6 +736,7 @@ function renderYearlyReview(trend, txns, goalsRow) {
   let income = 0;
   let expense = 0;
   txns.forEach((t) => {
+    if (t.is_pending) return;
     if (parseInt(t.date.slice(0, 4), 10) !== year) return;
     if (t.type === "income") income += Number(t.amount);
     else expense += Number(t.amount);
