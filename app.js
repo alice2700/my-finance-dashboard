@@ -107,13 +107,19 @@ async function loadData() {
       { data: txns, error: txnErr },
       { data: goalsRows, error: goalsErr },
       { data: stockTxns, error: stockTxnErr },
+      { data: budgetGroupsRaw, error: bgErr },
+      { data: budgetCatsRaw, error: bgcErr },
+      { data: budgetAmountsRaw, error: baErr },
     ] = await Promise.all([
       sb.from("category_map").select("id,item_name,mid_name,type"),
       sb.from("asset_snapshots").select("year,month,cash_and_deposits,other_investments,stock_market_value").order("year").order("month"),
       sb.from("account_balances").select("account_name,account_type,balance,recorded_at").order("recorded_at"),
-      sb.from("transactions").select("date,amount,type,category_id,note").limit(5000),
+      sb.from("transactions").select("date,amount,type,category_id,note,is_special").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
       sb.from("stock_transactions").select("ticker,market,stock_name,trade_date,side,shares,amount_twd").limit(5000),
+      sb.from("budget_groups").select("id,name,mode"),
+      sb.from("budget_group_categories").select("budget_group_id,category_id"),
+      sb.from("budget_amounts").select("budget_group_id,year,month,amount"),
     ]);
     if (catErr) throw catErr;
     if (snapErr) throw snapErr;
@@ -121,6 +127,21 @@ async function loadData() {
     if (txnErr) throw txnErr;
     if (goalsErr) throw goalsErr;
     if (stockTxnErr) throw stockTxnErr;
+    if (bgErr) throw bgErr;
+    if (bgcErr) throw bgcErr;
+    if (baErr) throw baErr;
+
+    const groupById = {};
+    (budgetGroupsRaw || []).forEach((g) => {
+      groupById[g.id] = { id: g.id, name: g.name, mode: g.mode, categoryIds: [], amounts: {} };
+    });
+    (budgetCatsRaw || []).forEach((bc) => {
+      if (groupById[bc.budget_group_id]) groupById[bc.budget_group_id].categoryIds.push(bc.category_id);
+    });
+    (budgetAmountsRaw || []).forEach((ba) => {
+      if (groupById[ba.budget_group_id]) groupById[ba.budget_group_id].amounts[ba.year + "-" + ba.month] = Number(ba.amount);
+    });
+    budgetGroups = Object.values(groupById);
 
     const catMap = {};
     (categories || []).forEach((c) => { catMap[c.id] = { item_name: c.item_name, mid_name: c.mid_name || "未分類" }; });
@@ -551,6 +572,7 @@ let cashflowMonth = null;
 let cashflowRange = "month"; // month | year
 let earliestTxnKey = null;
 let latestTxnKey = null;
+let budgetGroups = [];
 let earliestTxnYear = null;
 let latestTxnYear = null;
 
@@ -586,6 +608,64 @@ function renderCashflowView() {
   document.querySelectorAll("#cashflowRangeToggle .segmented-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.range === cashflowRange);
   });
+
+  renderBudgetStatus();
+}
+
+// 月度制群組：實際花費 vs 該期間預算金額，<80%綠、80-100%黃、>100%紅
+// 累積制群組（旅遊基金）：不受頁面月/年切換影響，永遠顯示「今年至今」的提撥額度 vs 實際花費（排除 is_special）
+function renderBudgetStatus() {
+  const container = document.getElementById("budgetGroupsList");
+  if (!container) return;
+  if (!budgetGroups.length) {
+    container.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚未設定預算群組</span></div>';
+    return;
+  }
+
+  const rows = budgetGroups.map((g) => {
+    if (g.mode === "cumulative") {
+      const now = new Date();
+      const year = now.getFullYear();
+      const elapsedMonths = now.getMonth() + 1;
+      let accrued = 0;
+      for (let m = 1; m <= elapsedMonths; m++) accrued += g.amounts[year + "-" + m] || 0;
+      let actual = 0;
+      allTxns.forEach((t) => {
+        if (t.type !== "expense" || t.is_special) return;
+        if (!g.categoryIds.includes(t.category_id)) return;
+        if (parseInt(t.date.slice(0, 4), 10) !== year) return;
+        actual += Number(t.amount);
+      });
+      const remaining = accrued - actual;
+      return `<div class="budget-row">
+        <span class="budget-dot ${remaining >= 0 ? "green" : "red"}"></span>
+        <span class="budget-name">${g.name}</span>
+        <span class="budget-value">已提撥 ${fmt(accrued)}，已花 ${fmt(actual)}，${remaining >= 0 ? "剩餘" : "超支"} ${fmt(Math.abs(remaining))}</span>
+      </div>`;
+    }
+
+    const months = cashflowRange === "year" ? Array.from({ length: 12 }, (_, i) => i + 1) : [cashflowMonth];
+    let budget = 0;
+    months.forEach((m) => { budget += g.amounts[cashflowYear + "-" + m] || 0; });
+    let actual = 0;
+    allTxns.forEach((t) => {
+      if (t.type !== "expense") return;
+      if (!g.categoryIds.includes(t.category_id)) return;
+      const y = parseInt(t.date.slice(0, 4), 10);
+      const m = parseInt(t.date.slice(5, 7), 10);
+      if (y !== cashflowYear) return;
+      if (cashflowRange === "month" && m !== cashflowMonth) return;
+      actual += Number(t.amount);
+    });
+    const pct = budget ? (actual / budget) * 100 : 0;
+    const status = pct < 80 ? "green" : pct <= 100 ? "yellow" : "red";
+    return `<div class="budget-row">
+      <span class="budget-dot ${status}"></span>
+      <span class="budget-name">${g.name}</span>
+      <span class="budget-value">${fmt(actual)} / ${fmt(budget)}（${pct.toFixed(0)}%）</span>
+    </div>`;
+  });
+  container.innerHTML = rows.join("");
 }
 
 document.getElementById("cashflowPrevMonth").addEventListener("click", () => {

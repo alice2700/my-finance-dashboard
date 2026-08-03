@@ -388,6 +388,29 @@ html, body {
 .gain-neg { color: var(--clay); font-weight: 600; }
 .gain-muted { color: var(--muted); }
 
+/* 預算狀態 */
+.budget-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.budget-row:last-child { border-bottom: none; }
+.budget-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--muted);
+}
+.budget-dot.green { background: var(--sage); }
+.budget-dot.yellow { background: #D9B382; }
+.budget-dot.red { background: var(--clay); }
+.budget-name { color: var(--ink); flex-shrink: 0; }
+.budget-value { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; text-align: right; }
+
 .card.error { border-color: var(--clay); }
 .card.error code {
   background: var(--clay-soft);
