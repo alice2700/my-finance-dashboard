@@ -959,4 +959,72 @@ function renderStocks(stocks) {
   renderStockTable(usEl, merged.filter((s) => !s.isTW), total);
 }
 
+// ===========================================================
+// 輸入：新增資產快照（account_balances）
+// ===========================================================
+const balanceDateInput = document.getElementById("balDate");
+if (balanceDateInput) balanceDateInput.value = new Date().toISOString().slice(0, 10);
+
+const recentBalances = [];
+function renderRecentBalances() {
+  const el = document.getElementById("balanceRecent");
+  if (!recentBalances.length) {
+    el.innerHTML = `<div class="flow-item-top"><span class="flow-item-name">尚未新增任何紀錄</span></div>`;
+    return;
+  }
+  el.innerHTML = recentBalances
+    .map(
+      (b) => `<div class="flow-item">
+        <div class="flow-item-top">
+          <span class="flow-item-name">${b.account_name}（${b.date}）</span>
+          <span class="flow-item-value">${fmt(b.balance)}</span>
+        </div>
+      </div>`
+    )
+    .join("");
+}
+
+const balanceForm = document.getElementById("balanceForm");
+if (balanceForm) {
+  balanceForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const accountName = document.getElementById("balAccountName").value.trim();
+    const accountType = document.getElementById("balAccountType").value;
+    const amount = document.getElementById("balAmount").value;
+    const date = document.getElementById("balDate").value;
+    const note = document.getElementById("balNote").value.trim();
+    const btn = document.getElementById("balSubmit");
+    const msgEl = document.getElementById("balMessage");
+
+    btn.disabled = true;
+    btn.textContent = "新增中...";
+    msgEl.classList.add("hidden");
+
+    const { error } = await sb.from("account_balances").insert({
+      account_name: accountName,
+      account_type: accountType,
+      balance: Number(amount),
+      recorded_at: date,
+      note: note || null,
+    });
+
+    btn.disabled = false;
+    btn.textContent = "新增";
+
+    if (error) {
+      msgEl.textContent = "新增失敗：" + error.message;
+      msgEl.className = "entry-message error";
+    } else {
+      msgEl.textContent = "已新增";
+      msgEl.className = "entry-message success";
+      recentBalances.unshift({ account_name: accountName, balance: Number(amount), date });
+      renderRecentBalances();
+      document.getElementById("balAmount").value = "";
+      document.getElementById("balNote").value = "";
+    }
+    msgEl.classList.remove("hidden");
+  });
+  renderRecentBalances();
+}
+
 initAuth();

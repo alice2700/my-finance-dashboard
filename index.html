@@ -176,6 +176,52 @@
       </div>
     </section>
 
+    <!-- ============ 輸入 ============ -->
+    <section class="page hidden" id="page-input">
+      <div class="card">
+        <div class="card-title">新增資產快照</div>
+        <form id="balanceForm" class="entry-form">
+          <label>帳戶名稱
+            <input list="accountNames" id="balAccountName" autocomplete="off" required />
+            <datalist id="accountNames">
+              <option value="國泰-證券"></option>
+              <option value="國泰-生活"></option>
+              <option value="國泰-備用"></option>
+              <option value="富邦"></option>
+              <option value="linebank-主帳戶"></option>
+              <option value="linebank-口袋帳戶"></option>
+              <option value="郵局"></option>
+              <option value="台幣定存"></option>
+              <option value="外幣定存"></option>
+              <option value="股票"></option>
+            </datalist>
+          </label>
+          <label>帳戶類型
+            <select id="balAccountType" required>
+              <option value="cash">活期存款</option>
+              <option value="investment">定存 / 其他投資</option>
+              <option value="stock">股票</option>
+            </select>
+          </label>
+          <label>餘額
+            <input type="number" id="balAmount" inputmode="decimal" step="1" required />
+          </label>
+          <label>日期
+            <input type="date" id="balDate" required />
+          </label>
+          <label>備註（選填）
+            <input type="text" id="balNote" />
+          </label>
+          <button type="submit" id="balSubmit">新增</button>
+          <p id="balMessage" class="entry-message hidden"></p>
+        </form>
+      </div>
+      <div class="card">
+        <div class="card-title">這次新增的紀錄</div>
+        <div id="balanceRecent" class="flow-list"></div>
+      </div>
+    </section>
+
     <div id="loadError" class="card error hidden">
       <div class="card-title">無法載入資料</div>
       <p id="loadErrorDetail"></p>
@@ -195,6 +241,9 @@
     </button>
     <button class="tab" data-page="stocks">
       <span>股票</span>
+    </button>
+    <button class="tab" data-page="input">
+      <span>輸入</span>
     </button>
   </nav>
 

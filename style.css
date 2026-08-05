@@ -411,6 +411,42 @@ html, body {
 .budget-name { color: var(--ink); flex-shrink: 0; }
 .budget-value { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; text-align: right; }
 
+/* 輸入表單 */
+.entry-form { display: flex; flex-direction: column; gap: 12px; }
+.entry-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.entry-form input, .entry-form select {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--ink);
+}
+.entry-form input:focus, .entry-form select:focus { outline: 2px solid var(--sage); outline-offset: 1px; }
+.entry-form button {
+  border: none;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  background: var(--sage);
+  color: #fff;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.entry-form button:disabled { opacity: 0.6; }
+.entry-message { font-size: 12px; margin: 0; }
+.entry-message.success { color: var(--sage); }
+.entry-message.error { color: var(--clay); }
+
 .card.error { border-color: var(--clay); }
 .card.error code {
   background: var(--clay-soft);
