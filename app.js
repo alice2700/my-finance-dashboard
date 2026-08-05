@@ -984,6 +984,57 @@ function renderRecentBalances() {
     .join("");
 }
 
+// ---------- 外幣帳戶：即時匯率換算 ----------
+let lastUsdRate = null;
+
+function recomputeForeignAmount() {
+  const usd = Number(document.getElementById("balUsdAmount").value);
+  if (lastUsdRate && usd) {
+    document.getElementById("balAmount").value = Math.round(usd * lastUsdRate);
+  }
+}
+
+const balIsForeign = document.getElementById("balIsForeign");
+if (balIsForeign) {
+  balIsForeign.addEventListener("change", () => {
+    const on = balIsForeign.checked;
+    document.getElementById("foreignFields").classList.toggle("hidden", !on);
+    const amountInput = document.getElementById("balAmount");
+    const amountLabel = document.getElementById("balAmountLabel");
+    amountInput.readOnly = on;
+    amountLabel.firstChild.textContent = on ? "台幣等值（自動計算）" : "餘額";
+    if (!on) {
+      lastUsdRate = null;
+      document.getElementById("rateDisplay").textContent = "";
+      document.getElementById("balUsdAmount").value = "";
+    }
+  });
+
+  document.getElementById("balUsdAmount").addEventListener("input", recomputeForeignAmount);
+
+  document.getElementById("fetchRateBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("fetchRateBtn");
+    const display = document.getElementById("rateDisplay");
+    btn.disabled = true;
+    btn.textContent = "抓取中...";
+    try {
+      const res = await fetch("https://open.er-api.com/v6/latest/USD");
+      const data = await res.json();
+      lastUsdRate = data.rates && data.rates.TWD;
+      if (lastUsdRate) {
+        display.textContent = `1 美金 ≈ ${lastUsdRate.toFixed(3)} 台幣`;
+        recomputeForeignAmount();
+      } else {
+        display.textContent = "抓取失敗，請手動輸入台幣等值";
+      }
+    } catch (err) {
+      display.textContent = "抓取失敗，請手動輸入台幣等值";
+    }
+    btn.disabled = false;
+    btn.textContent = "抓即時匯率";
+  });
+}
+
 const balanceForm = document.getElementById("balanceForm");
 if (balanceForm) {
   balanceForm.addEventListener("submit", async (e) => {
@@ -992,7 +1043,13 @@ if (balanceForm) {
     const accountType = document.getElementById("balAccountType").value;
     const amount = document.getElementById("balAmount").value;
     const date = document.getElementById("balDate").value;
-    const note = document.getElementById("balNote").value.trim();
+    const isForeign = balIsForeign && balIsForeign.checked;
+    const usdAmount = document.getElementById("balUsdAmount").value;
+    let note = document.getElementById("balNote").value.trim();
+    if (isForeign && usdAmount) {
+      const rateNote = `美金 ${usdAmount} × 匯率 ${lastUsdRate ? lastUsdRate.toFixed(3) : "?"}`;
+      note = note ? `${rateNote}；${note}` : rateNote;
+    }
     const btn = document.getElementById("balSubmit");
     const msgEl = document.getElementById("balMessage");
 
@@ -1021,6 +1078,7 @@ if (balanceForm) {
       renderRecentBalances();
       document.getElementById("balAmount").value = "";
       document.getElementById("balNote").value = "";
+      document.getElementById("balUsdAmount").value = "";
     }
     msgEl.classList.remove("hidden");
   });

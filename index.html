@@ -193,6 +193,7 @@
               <option value="郵局"></option>
               <option value="台幣定存"></option>
               <option value="外幣定存"></option>
+              <option value="外幣活存"></option>
               <option value="股票"></option>
             </datalist>
           </label>
@@ -203,7 +204,20 @@
               <option value="stock">股票</option>
             </select>
           </label>
-          <label>餘額
+          <label class="checkbox-label">
+            <input type="checkbox" id="balIsForeign" />
+            外幣帳戶（美金，自動換算台幣）
+          </label>
+          <div id="foreignFields" class="hidden">
+            <label>美金金額
+              <input type="number" id="balUsdAmount" inputmode="decimal" step="0.01" />
+            </label>
+            <div class="rate-row">
+              <button type="button" id="fetchRateBtn">抓即時匯率</button>
+              <span id="rateDisplay"></span>
+            </div>
+          </div>
+          <label id="balAmountLabel">餘額
             <input type="number" id="balAmount" inputmode="decimal" step="1" required />
           </label>
           <label>日期
