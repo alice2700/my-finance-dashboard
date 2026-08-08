@@ -243,6 +243,8 @@ async function loadData() {
     stockPrices = {};
     (stockPricesRaw || []).forEach((p) => { stockPrices[p.ticker] = p; });
 
+    allStockTxns = stockTxns || [];
+
     renderOverview(trend);
 
     allTxns = txns || [];
@@ -1043,6 +1045,7 @@ function renderStockInvested(stockTxns) {
 let stockPositions = {};
 let latestBalanceByAccount = {};
 let latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
+let allStockTxns = [];
 let stockPrices = {}; // ticker -> { price, price_date }，抓不到 Apps Script 即時報價時的收盤價備援
 
 // 股票市值備援順序：Apps Script 即時價 -> account_balances 手動記錄 -> stock_prices 昨日收盤價 × 股數
@@ -1359,6 +1362,208 @@ if (balanceForm) {
     msgEl.classList.remove("hidden");
   });
   renderRecentBalances();
+}
+
+// ===========================================================
+// 輸入：證券對帳單 CSV 匯入（國泰證券格式，台股/美股皆支援）
+// ===========================================================
+// 台股對帳單只有中文股名，沒有代碼；證交所/櫃買中心的 API 沒開放瀏覽器跨網域存取，
+// 所以改查 Supabase 的 tw_ticker_names（GitHub Actions 每天從證交所/櫃買中心同步一次）
+async function resolveTickerNames(names) {
+  const uniqueNames = [...new Set(names)];
+  if (!uniqueNames.length) return {};
+  const { data, error } = await sb.from("tw_ticker_names").select("name,ticker").in("name", uniqueNames);
+  if (error) {
+    console.error("股票代碼對照表查詢失敗", error);
+    return {};
+  }
+  const map = {};
+  (data || []).forEach((r) => { map[r.name] = r.ticker; });
+  return map;
+}
+
+async function fetchUsdTwdRateForImport() {
+  try {
+    const res = await fetch("https://open.er-api.com/v6/latest/USD");
+    const data = await res.json();
+    return data.rates && data.rates.TWD;
+  } catch (err) {
+    return null;
+  }
+}
+
+// 簡易 CSV parser：處理帶引號、引號內有逗號的欄位（例如 "-3,988"）
+function parseCsvRows(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field); field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.length > 1 || row[0] !== "") rows.push(row);
+      row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function parseNum(s) {
+  if (s == null) return 0;
+  return parseFloat(String(s).replace(/,/g, "")) || 0;
+}
+
+function slashDateToIso(s) {
+  const parts = String(s).trim().split("/");
+  if (parts.length !== 3) return null;
+  const [y, m, d] = parts;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+async function parseStatementCsv(text) {
+  const rows = parseCsvRows(text).filter((r) => r.some((c) => c.trim() !== ""));
+  const headerIdx = rows.findIndex((r) => r[0] === "股名" || r[0] === "代號");
+  if (headerIdx === -1) return { format: null, results: [] };
+  const isTW = rows[headerIdx][0] === "股名";
+  const dataRows = rows.slice(headerIdx + 1);
+  const results = [];
+
+  if (isTW) {
+    // 股名,日期,成交股數,淨收付金額,買賣別,成交價,成本,手續費,交易稅,...,委託書號
+    const names = dataRows.map((r) => r[0] && r[0].trim()).filter(Boolean);
+    const nameMap = await resolveTickerNames(names);
+    dataRows.forEach((r) => {
+      const [stockName, dateStr, sharesStr, netAmountStr, sideStr, priceStr, costStr, feeStr, taxStr, , , , , , orderNo] = r;
+      if (!stockName) return;
+      const ticker = nameMap[stockName.trim()] || null;
+      const side = sideStr === "現買" ? "buy" : sideStr === "現賣" ? "sell" : null;
+      results.push({
+        ticker, stock_name: stockName.trim(), market: "TW", currency: "TWD",
+        trade_date: slashDateToIso(dateStr), side,
+        shares: parseNum(sharesStr), price: parseNum(priceStr),
+        amount_original: parseNum(costStr), amount_twd: Math.abs(parseNum(netAmountStr)),
+        fee: parseNum(feeStr), tax: parseNum(taxStr),
+        note: orderNo ? orderNo.trim() : null,
+        _rawSide: sideStr,
+        _skipReason: !ticker ? "找不到股票代碼" : !side ? `無法辨識買賣別：${sideStr}` : null,
+      });
+    });
+  } else {
+    // 代號,股票名稱,交易日期,買賣別,股數,交割日期,市場,幣別,成交價,成交金額,手續費,其他費用,原幣應收付
+    const rate = await fetchUsdTwdRateForImport();
+    dataRows.forEach((r) => {
+      const [ticker, stockName, dateStr, sideStr, sharesStr, , , currency, priceStr, amountOriginalStr, feeStr, otherFeeStr, netAmountStr] = r;
+      if (!ticker) return;
+      const side = sideStr === "買進" ? "buy" : sideStr === "賣出" ? "sell" : null;
+      results.push({
+        ticker: ticker.trim(), stock_name: (stockName || "").trim(), market: "US", currency: currency || "USD",
+        trade_date: slashDateToIso(dateStr), side,
+        shares: parseNum(sharesStr), price: parseNum(priceStr),
+        amount_original: parseNum(amountOriginalStr),
+        amount_twd: rate ? Math.round(Math.abs(parseNum(netAmountStr)) * rate) : null,
+        fee: parseNum(feeStr) + parseNum(otherFeeStr), tax: 0,
+        note: null,
+        _rawSide: sideStr,
+        _skipReason: !side ? `非交易事件，略過：${sideStr}` : !rate ? "匯率抓取失敗" : null,
+      });
+    });
+  }
+
+  // 重複偵測：跟目前已存在的 stock_transactions 比對代碼+日期+股數+買賣別
+  results.forEach((r) => {
+    if (r._skipReason) return;
+    const dup = allStockTxns.some(
+      (t) => t.ticker === r.ticker && t.trade_date === r.trade_date &&
+        Math.abs(Number(t.shares) - r.shares) < 0.0001 && t.side === r.side
+    );
+    if (dup) r._skipReason = "已存在，略過";
+  });
+
+  return { format: isTW ? "TW" : "US", results };
+}
+
+let stockCsvParsedRows = [];
+
+const stockCsvFileInput = document.getElementById("stockCsvFile");
+if (stockCsvFileInput) {
+  stockCsvFileInput.addEventListener("change", async () => {
+    const file = stockCsvFileInput.files[0];
+    if (!file) return;
+    const statusEl = document.getElementById("stockCsvStatus");
+    const previewEl = document.getElementById("stockCsvPreview");
+    const confirmBtn = document.getElementById("stockCsvConfirm");
+    statusEl.textContent = "解析中...";
+    confirmBtn.classList.add("hidden");
+    previewEl.innerHTML = "";
+
+    const text = await file.text();
+    const { format, results } = await parseStatementCsv(text);
+    stockCsvParsedRows = results;
+
+    if (!format) {
+      statusEl.textContent = "無法辨識檔案格式（找不到「股名」或「代號」欄位）";
+      return;
+    }
+
+    const okCount = results.filter((r) => !r._skipReason).length;
+    statusEl.textContent = `${format === "TW" ? "台股" : "美股"}對帳單，共 ${results.length} 筆，可匯入 ${okCount} 筆`;
+
+    previewEl.innerHTML = results
+      .map((r) => {
+        const label = r._skipReason ? `⚠️ ${r._skipReason}` : `${r.ticker} ${r.stock_name}`;
+        return `<div class="flow-tx-row"${r._skipReason ? ' style="opacity:0.55;"' : ""}>
+          <span class="flow-tx-date">${r.trade_date ? r.trade_date.slice(5) : "?"}</span>
+          <span class="flow-tx-note">${label}｜${r._rawSide || ""}｜${r.shares}股</span>
+          <span class="flow-tx-amount">${r.amount_twd != null ? fmt(r.amount_twd) : "-"}</span>
+        </div>`;
+      })
+      .join("");
+
+    if (okCount > 0) confirmBtn.classList.remove("hidden");
+    else confirmBtn.classList.add("hidden");
+  });
+}
+
+const stockCsvConfirmBtn = document.getElementById("stockCsvConfirm");
+if (stockCsvConfirmBtn) {
+  stockCsvConfirmBtn.addEventListener("click", async () => {
+    const statusEl = document.getElementById("stockCsvStatus");
+    const toInsert = stockCsvParsedRows
+      .filter((r) => !r._skipReason)
+      .map((r) => ({
+        ticker: r.ticker, stock_name: r.stock_name, market: r.market, trade_date: r.trade_date,
+        side: r.side, shares: r.shares, price: r.price, currency: r.currency,
+        amount_original: r.amount_original, amount_twd: r.amount_twd, fee: r.fee, tax: r.tax, note: r.note,
+      }));
+    stockCsvConfirmBtn.disabled = true;
+    stockCsvConfirmBtn.textContent = "匯入中...";
+    const { error } = await sb.from("stock_transactions").insert(toInsert);
+    stockCsvConfirmBtn.disabled = false;
+    stockCsvConfirmBtn.textContent = "確認匯入";
+    if (error) {
+      statusEl.textContent = "匯入失敗：" + error.message;
+      return;
+    }
+    statusEl.textContent = `已匯入 ${toInsert.length} 筆`;
+    stockCsvConfirmBtn.classList.add("hidden");
+    allStockTxns = allStockTxns.concat(toInsert);
+    document.getElementById("stockCsvPreview").innerHTML = "";
+    document.getElementById("stockCsvFile").value = "";
+  });
 }
 
 initAuth();

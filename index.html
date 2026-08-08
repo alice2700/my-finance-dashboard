@@ -247,6 +247,14 @@
         <div class="card-title">這次新增的紀錄</div>
         <div id="balanceRecent" class="flow-list"></div>
       </div>
+
+      <div class="card">
+        <div class="card-title">匯入證券對帳單（CSV）</div>
+        <input type="file" id="stockCsvFile" accept=".csv,text/csv" class="entry-form" style="padding:10px;" />
+        <div id="stockCsvStatus" class="entry-message" style="margin-top:8px;"></div>
+        <div id="stockCsvPreview" style="margin-top:10px;"></div>
+        <button type="button" id="stockCsvConfirm" class="hidden" style="margin-top:10px;width:100%;border:none;border-radius:10px;padding:12px;font-size:15px;font-weight:600;font-family:inherit;background:var(--sage);color:#fff;cursor:pointer;">確認匯入</button>
+      </div>
     </section>
 
     <div id="loadError" class="card error hidden">

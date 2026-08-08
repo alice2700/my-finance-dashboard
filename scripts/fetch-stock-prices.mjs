@@ -22,12 +22,21 @@ function rocDateToIso(rocDate) {
   return `${year}-${month}-${day}`;
 }
 
-async function fetchTwPrices() {
+async function fetchTwseList() {
+  const res = await fetch("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL");
+  if (!res.ok) throw new Error(`TWSE fetch failed: ${res.status}`);
+  return res.json();
+}
+
+async function fetchTpexList() {
   const res = await fetch("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes");
   if (!res.ok) throw new Error(`TPEx fetch failed: ${res.status}`);
-  const rows = await res.json();
+  return res.json();
+}
+
+function extractTwPrices(tpexRows) {
   const byCode = {};
-  rows.forEach((r) => { byCode[r.SecuritiesCompanyCode] = r; });
+  tpexRows.forEach((r) => { byCode[r.SecuritiesCompanyCode] = r; });
 
   const results = [];
   for (const ticker of TW_TICKERS) {
@@ -39,6 +48,15 @@ async function fetchTwPrices() {
     results.push({ ticker, price: parseFloat(row.Close), price_date: rocDateToIso(row.Date) });
   }
   return results;
+}
+
+// 台股對帳單只有中文股名沒有代碼，瀏覽器直接呼叫證交所/櫃買中心會被 CORS 擋掉，
+// 所以在這裡先把「股名 -> 代碼」對照表整份存進 Supabase，前端改查 Supabase
+function extractTickerNames(twseRows, tpexRows) {
+  const map = {};
+  twseRows.forEach((r) => { if (r.Name && r.Code) map[r.Name] = r.Code; });
+  tpexRows.forEach((r) => { if (r.CompanyName && r.SecuritiesCompanyCode) map[r.CompanyName] = r.SecuritiesCompanyCode; });
+  return Object.entries(map).map(([name, ticker]) => ({ name, ticker }));
 }
 
 async function fetchUsdTwdRate() {
@@ -75,27 +93,37 @@ async function fetchUsPrices() {
   return results;
 }
 
-async function upsert(rows) {
+async function upsert(table, rows) {
   if (!rows.length) return;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/stock_prices`, {
-    method: "POST",
-    headers: {
-      apikey: SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: "resolution=merge-duplicates",
-    },
-    body: JSON.stringify(rows),
-  });
-  if (!res.ok) {
-    throw new Error(`Upsert failed: ${res.status} ${await res.text()}`);
+  // 大批資料分批寫入，避免單次 request body 太大
+  const CHUNK = 2000;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+      method: "POST",
+      headers: {
+        apikey: SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates",
+      },
+      body: JSON.stringify(chunk),
+    });
+    if (!res.ok) {
+      throw new Error(`Upsert to ${table} failed: ${res.status} ${await res.text()}`);
+    }
   }
 }
 
-const twPrices = await fetchTwPrices();
-const usPrices = await fetchUsPrices();
-const all = twPrices.concat(usPrices);
+const [twseList, tpexList] = await Promise.all([fetchTwseList(), fetchTpexList()]);
 
-console.log("Fetched prices:", all);
-await upsert(all);
-console.log(`Upserted ${all.length} prices`);
+const twPrices = extractTwPrices(tpexList);
+const usPrices = await fetchUsPrices();
+const allPrices = twPrices.concat(usPrices);
+console.log("Fetched prices:", allPrices);
+await upsert("stock_prices", allPrices);
+console.log(`Upserted ${allPrices.length} prices`);
+
+const tickerNames = extractTickerNames(twseList, tpexList);
+await upsert("tw_ticker_names", tickerNames);
+console.log(`Upserted ${tickerNames.length} ticker names`);
