@@ -575,7 +575,7 @@ function renderPendingList(pending, catInfo) {
     return;
   }
   const sorted = [...pending].sort((a, b) => a.date.localeCompare(b.date));
-  el.innerHTML = sorted
+  const rows = sorted
     .map((t) => {
       const info = catInfo[t.category_id] || { item_name: "未分類" };
       const sign = t.type === "income" ? "+" : "-";
@@ -586,6 +586,24 @@ function renderPendingList(pending, catInfo) {
       </div>`;
     })
     .join("");
+
+  const net = pendingNetDiff(pending);
+  const netLabel = net > 0 ? `多收 ${fmt(net)}（已計入收入）` : net < 0 ? `多付 ${fmt(-net)}（已計入支出）` : "剛好打平";
+  el.innerHTML =
+    rows +
+    `<div class="flow-item-top" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+      <span class="flow-item-name">淨額</span>
+      <span class="flow-item-value">${netLabel}</span>
+    </div>`;
+}
+
+// 待銷帳淨額：多收（收 > 付）算收入、多付（付 > 收）算支出，都反映進統計
+function pendingNetDiff(pending) {
+  let net = 0;
+  pending.forEach((t) => {
+    net += t.type === "income" ? Number(t.amount) : -Number(t.amount);
+  });
+  return net;
 }
 
 // ---------- 現金流：月/年 切換 ----------
@@ -612,6 +630,23 @@ function renderCashflowView() {
     if (t.is_pending) { pending.push(t); return; }
     (t.type === "income" ? income : expense).push(t);
   });
+
+  // 待銷帳淨額（代墊差額）：多收算收入、多付算支出，一起反映進統計
+  const PENDING_NET_CATEGORY_ID = 41; // 代墊
+  const net = pendingNetDiff(pending);
+  if (net !== 0) {
+    const repDate = cashflowRange === "month"
+      ? `${cashflowYear}-${String(cashflowMonth).padStart(2, "0")}-01`
+      : `${cashflowYear}-01-01`;
+    const synthetic = {
+      date: repDate,
+      amount: Math.abs(net),
+      category_id: PENDING_NET_CATEGORY_ID,
+      note: net > 0 ? "待銷帳淨額（多收）" : "待銷帳淨額（多付）",
+    };
+    (net > 0 ? income : expense).push(synthetic);
+  }
+
   renderCashflow({
     income: buildFlowHierarchy(income, allCatMap),
     expense: buildFlowHierarchy(expense, allCatMap),
