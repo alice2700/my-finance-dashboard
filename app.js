@@ -238,6 +238,7 @@ async function loadData() {
     stockPositions = buildStockPositions(stockTxns || [], txns || [], catMap);
 
     renderOverview(trend);
+    renderAssetComposition();
 
     allTxns = txns || [];
     allCatMap = catMap;
@@ -349,6 +350,61 @@ function renderOverview(trend) {
   renderMarketNote(trend);
   renderAssetChart();
   renderBalanceChart();
+}
+
+// ---------- 資產組成：活存（分帳戶）/ 定存（分帳戶）/ 台股 / 美股 ----------
+// 台股、美股市值等股票分頁資料載入後才知道，先用帳戶餘額畫活存/定存，
+// 股票分頁載入完成後 renderStocks() 會再呼叫一次補上台股/美股
+let assetCompositionStockTotals = { tw: null, us: null };
+
+function renderAssetComposition() {
+  const el = document.getElementById("assetComposition");
+  if (!el) return;
+
+  const cashAccounts = [];
+  const investmentAccounts = [];
+  Object.entries(latestBalanceByAccount).forEach(([name, b]) => {
+    if (b.account_type === "cash") cashAccounts.push({ name, value: Number(b.balance) });
+    else if (b.account_type === "investment") investmentAccounts.push({ name, value: Number(b.balance) });
+  });
+  cashAccounts.sort((a, b) => b.value - a.value);
+  investmentAccounts.sort((a, b) => b.value - a.value);
+
+  const rows = [];
+  cashAccounts.forEach((a) => rows.push({ group: "活存", label: a.name, value: a.value }));
+  investmentAccounts.forEach((a) => rows.push({ group: "定存", label: a.name, value: a.value }));
+  if (assetCompositionStockTotals.tw != null) rows.push({ group: "股票", label: "台股", value: assetCompositionStockTotals.tw });
+  if (assetCompositionStockTotals.us != null) rows.push({ group: "股票", label: "美股", value: assetCompositionStockTotals.us });
+
+  if (!rows.length) {
+    el.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚無資產資料</span></div>';
+    return;
+  }
+
+  const total = rows.reduce((sum, r) => sum + r.value, 0);
+
+  renderChart("assetComposition", "chartAssetComposition", {
+    type: "doughnut",
+    data: {
+      labels: rows.map((r) => r.label),
+      datasets: [{ data: rows.map((r) => r.value), backgroundColor: PIE_COLORS, borderWidth: 2, borderColor: "#fff" }],
+    },
+    options: {
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 }, color: COLOR_MUTED } },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.raw)}` } },
+      },
+    },
+  });
+
+  el.innerHTML = rows
+    .map(
+      (r) => `<div class="flow-item-top">
+        <span class="flow-item-name">${r.group}｜${r.label}</span>
+        <span class="flow-item-value">${fmt(r.value)}（${total ? ((r.value / total) * 100).toFixed(1) : 0}%）</span>
+      </div>`
+    )
+    .join("");
 }
 
 function seriesValue(t, series) {
@@ -1089,6 +1145,12 @@ function renderStocks(stocks) {
   const total = withValue.reduce((sum, s) => sum + s.marketValue, 0);
   const totalUnrealized = merged.reduce((sum, s) => sum + (s.unrealizedGain || 0), 0);
   const totalRealized = merged.reduce((sum, s) => sum + (s.realizedGain || 0), 0);
+
+  assetCompositionStockTotals = {
+    tw: withValue.filter((s) => s.isTW).reduce((sum, s) => sum + s.marketValue, 0),
+    us: withValue.filter((s) => !s.isTW).reduce((sum, s) => sum + s.marketValue, 0),
+  };
+  renderAssetComposition();
 
   if (withValue.length) {
     renderChart("stocks", "chartStocks", {
