@@ -1,0 +1,21 @@
+name: PEG Improved Screener
+
+on:
+  workflow_dispatch: {} # run manually for now; consider a monthly schedule once revenue data timing is confirmed
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run PEG improved screener
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/screener-peg.mjs
