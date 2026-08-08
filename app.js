@@ -114,7 +114,7 @@ async function loadData() {
       sb.from("category_map").select("id,item_name,mid_name,type"),
       sb.from("asset_snapshots").select("year,month,cash_and_deposits,other_investments,stock_market_value").order("year").order("month"),
       sb.from("account_balances").select("account_name,account_type,balance,recorded_at").order("recorded_at"),
-      sb.from("transactions").select("date,amount,type,category_id,note,is_special").limit(5000),
+      sb.from("transactions").select("date,amount,type,category_id,note,is_special,is_pending").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
       sb.from("stock_transactions").select("ticker,market,stock_name,trade_date,side,shares,amount_twd").limit(5000),
       sb.from("budget_groups").select("id,name,mode"),
@@ -566,6 +566,28 @@ function renderCashflow(breakdown) {
   renderFlowHierarchy(document.getElementById("expenseFlow"), breakdown.expense, "expense");
 }
 
+// 待銷帳：不列入任何統計，但另外顯示出來，避免看起來像資料憑空消失
+function renderPendingList(pending, catInfo) {
+  const el = document.getElementById("pendingFlow");
+  if (!el) return;
+  if (!pending.length) {
+    el.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">這段期間沒有待銷帳項目</span></div>';
+    return;
+  }
+  const sorted = [...pending].sort((a, b) => a.date.localeCompare(b.date));
+  el.innerHTML = sorted
+    .map((t) => {
+      const info = catInfo[t.category_id] || { item_name: "未分類" };
+      const sign = t.type === "income" ? "+" : "-";
+      return `<div class="flow-tx-row">
+        <span class="flow-tx-date">${t.date.slice(5)}</span>
+        <span class="flow-tx-note">${info.item_name}｜${t.note || ""}</span>
+        <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
+      </div>`;
+    })
+    .join("");
+}
+
 // ---------- 現金流：月/年 切換 ----------
 let allTxns = [];
 let allCatMap = {};
@@ -581,18 +603,20 @@ let latestTxnYear = null;
 function renderCashflowView() {
   const income = [];
   const expense = [];
+  const pending = [];
   allTxns.forEach((t) => {
-    if (t.is_pending) return;
     const y = parseInt(t.date.slice(0, 4), 10);
     const m = parseInt(t.date.slice(5, 7), 10);
     if (y !== cashflowYear) return;
     if (cashflowRange === "month" && m !== cashflowMonth) return;
+    if (t.is_pending) { pending.push(t); return; }
     (t.type === "income" ? income : expense).push(t);
   });
   renderCashflow({
     income: buildFlowHierarchy(income, allCatMap),
     expense: buildFlowHierarchy(expense, allCatMap),
   });
+  renderPendingList(pending, allCatMap);
 
   const periodTag = cashflowRange === "month" ? cashflowYear + "/" + cashflowMonth : cashflowYear + "年";
   document.getElementById("labelIncomeFlow").textContent = periodTag + " 收入來源";
