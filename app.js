@@ -114,7 +114,7 @@ async function loadData() {
       sb.from("category_map").select("id,item_name,mid_name,type"),
       sb.from("asset_snapshots").select("year,month,cash_and_deposits,other_investments,stock_market_value").order("year").order("month"),
       sb.from("account_balances").select("account_name,account_type,balance,recorded_at").order("recorded_at"),
-      sb.from("transactions").select("date,amount,type,category_id,note,is_special,is_pending").limit(5000),
+      sb.from("transactions").select("id,date,amount,type,category_id,note,is_special,is_pending,pending_group").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
       sb.from("stock_transactions").select("ticker,market,stock_name,trade_date,side,shares,amount_twd").limit(5000),
       sb.from("budget_groups").select("id,name,mode"),
@@ -574,15 +574,46 @@ function renderPendingList(pending, catInfo) {
     el.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">這段期間沒有待銷帳項目</span></div>';
     return;
   }
-  const sorted = [...pending].sort((a, b) => a.date.localeCompare(b.date));
-  const rows = sorted
-    .map((t) => {
-      const info = catInfo[t.category_id] || { item_name: "未分類" };
-      const sign = t.type === "income" ? "+" : "-";
-      return `<div class="flow-tx-row">
-        <span class="flow-tx-date">${t.date.slice(5)}</span>
-        <span class="flow-tx-note">${info.item_name}｜${t.note || ""}</span>
-        <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
+
+  // 全部待銷帳交易（不限本期）用過的標籤，給 datalist 建議用
+  const allTags = [...new Set(allTxns.filter((t) => t.is_pending && t.pending_group).map((t) => t.pending_group))];
+  const datalistHtml = `<datalist id="pendingGroupOptions">${allTags.map((t) => `<option value="${t}"></option>`).join("")}</datalist>`;
+
+  // 依人工標籤分組，沒標籤的排最後
+  const groups = {};
+  pending.forEach((t) => {
+    const key = t.pending_group || "";
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(t);
+  });
+  const orderedKeys = Object.keys(groups).sort((a, b) => {
+    if (a === "") return 1;
+    if (b === "") return -1;
+    return a.localeCompare(b);
+  });
+
+  const groupsHtml = orderedKeys
+    .map((key) => {
+      const rows = [...groups[key]].sort((a, b) => a.date.localeCompare(b.date));
+      const groupNet = pendingNetDiff(rows);
+      const netLabel = groupNet > 0 ? `多收 ${fmt(groupNet)}` : groupNet < 0 ? `多付 ${fmt(-groupNet)}` : "打平";
+      const rowsHtml = rows
+        .map((t) => {
+          const info = catInfo[t.category_id] || { item_name: "未分類" };
+          const sign = t.type === "income" ? "+" : "-";
+          return `<div class="pending-row">
+            <div class="flow-tx-row">
+              <span class="flow-tx-date">${t.date.slice(5)}</span>
+              <span class="flow-tx-note">${info.item_name}｜${t.note || ""}</span>
+              <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
+            </div>
+            <input class="pending-tag-input" list="pendingGroupOptions" data-id="${t.id}" placeholder="分組標籤（自己判斷勾稽用，選填）" value="${t.pending_group || ""}" />
+          </div>`;
+        })
+        .join("");
+      return `<div class="pending-group">
+        <div class="pending-group-header"><span>${key || "未分組"}</span><span>${netLabel}</span></div>
+        ${rowsHtml}
       </div>`;
     })
     .join("");
@@ -590,11 +621,29 @@ function renderPendingList(pending, catInfo) {
   const net = pendingNetDiff(pending);
   const netLabel = net > 0 ? `多收 ${fmt(net)}（已計入收入）` : net < 0 ? `多付 ${fmt(-net)}（已計入支出）` : "剛好打平";
   el.innerHTML =
-    rows +
+    datalistHtml +
+    groupsHtml +
     `<div class="flow-item-top" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
-      <span class="flow-item-name">淨額</span>
+      <span class="flow-item-name">整體淨額</span>
       <span class="flow-item-value">${netLabel}</span>
     </div>`;
+
+  el.querySelectorAll(".pending-tag-input").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const id = input.dataset.id;
+      const value = input.value.trim();
+      input.disabled = true;
+      const { error } = await sb.from("transactions").update({ pending_group: value || null }).eq("id", id);
+      input.disabled = false;
+      if (error) {
+        alert("標籤儲存失敗：" + error.message);
+        return;
+      }
+      const t = allTxns.find((x) => String(x.id) === String(id));
+      if (t) t.pending_group = value || null;
+      renderCashflowView();
+    });
+  });
 }
 
 // 待銷帳淨額：多收（收 > 付）算收入、多付（付 > 收）算支出，都反映進統計
