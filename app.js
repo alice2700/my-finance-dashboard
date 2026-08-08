@@ -826,7 +826,10 @@ function renderCashflowView() {
   });
 
   // 待銷帳淨額（代墊差額）：多收算收入、多付算支出，一起反映進統計
-  const PENDING_NET_CATEGORY_ID = 41; // 代墊
+  // 收入方向沒有對應的「代墊」分類，另外掛一個假 id，顯示用的中類名稱才會正確標成「其他收入」
+  const PENDING_NET_EXPENSE_CATEGORY_ID = 41; // 代墊（既有分類，中類：其他支出）
+  const PENDING_NET_INCOME_CATEGORY_ID = -1; // 只用於顯示，不對應真的 category_map 資料
+  const catInfoWithPendingIncome = { ...allCatMap, [PENDING_NET_INCOME_CATEGORY_ID]: { item_name: "代墊", mid_name: "其他收入" } };
   const net = pendingNetDiff(pending);
   if (net !== 0) {
     const repDate = cashflowRange === "month"
@@ -835,14 +838,14 @@ function renderCashflowView() {
     const synthetic = {
       date: repDate,
       amount: Math.abs(net),
-      category_id: PENDING_NET_CATEGORY_ID,
+      category_id: net > 0 ? PENDING_NET_INCOME_CATEGORY_ID : PENDING_NET_EXPENSE_CATEGORY_ID,
       note: net > 0 ? "待銷帳淨額（多收）" : "待銷帳淨額（多付）",
     };
     (net > 0 ? income : expense).push(synthetic);
   }
 
   renderCashflow({
-    income: buildFlowHierarchy(income, allCatMap),
+    income: buildFlowHierarchy(income, catInfoWithPendingIncome),
     expense: buildFlowHierarchy(expense, allCatMap),
   });
   renderPendingList(pending, allCatMap);
