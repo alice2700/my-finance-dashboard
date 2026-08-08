@@ -621,8 +621,11 @@ function renderPendingList(pending, catInfo) {
         })
         .join("");
       return `<div class="pending-group">
-        <div class="pending-group-header"><span>${key || "未分組"}</span><span>${netLabel}</span></div>
-        ${rowsHtml}
+        <button class="pending-group-header">
+          <span><span class="flow-caret">▸</span>${key || "未分組"}</span>
+          <span>${netLabel}</span>
+        </button>
+        <div class="pending-group-body">${rowsHtml}</div>
       </div>`;
     })
     .join("");
@@ -637,6 +640,14 @@ function renderPendingList(pending, catInfo) {
       <span class="flow-item-name">整體淨額</span>
       <span class="flow-item-value">${netLabel}</span>
     </div>`;
+
+  el.querySelectorAll(".pending-group-header").forEach((header) => {
+    const body = header.nextElementSibling;
+    header.addEventListener("click", () => {
+      header.classList.toggle("expanded");
+      body.classList.toggle("expanded");
+    });
+  });
 
   async function saveTag(ids, value) {
     const { error } = await sb.from("transactions").update({ pending_group: value || null }).in("id", ids);

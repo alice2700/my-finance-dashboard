@@ -474,11 +474,23 @@ html, body {
 .pending-group-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0 0 6px;
+  font-family: inherit;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink);
-  padding-bottom: 6px;
+  cursor: pointer;
+  text-align: left;
+  gap: 8px;
 }
+.pending-group-header .flow-caret { margin-right: 4px; }
+.pending-group-header.expanded .flow-caret { transform: rotate(90deg); }
+.pending-group-body { display: none; }
+.pending-group-body.expanded { display: block; }
 .pending-row { padding: 4px 0 8px; }
 .pending-tag-input {
   width: 100%;
