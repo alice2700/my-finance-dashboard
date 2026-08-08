@@ -110,6 +110,7 @@ async function loadData() {
       { data: budgetGroupsRaw, error: bgErr },
       { data: budgetCatsRaw, error: bgcErr },
       { data: budgetAmountsRaw, error: baErr },
+      { data: stockPricesRaw, error: spErr },
     ] = await Promise.all([
       sb.from("category_map").select("id,item_name,mid_name,type"),
       sb.from("asset_snapshots").select("year,month,cash_and_deposits,other_investments,stock_market_value").order("year").order("month"),
@@ -120,12 +121,14 @@ async function loadData() {
       sb.from("budget_groups").select("id,name,mode"),
       sb.from("budget_group_categories").select("budget_group_id,category_id"),
       sb.from("budget_amounts").select("budget_group_id,year,month,amount"),
+      sb.from("stock_prices").select("ticker,price,price_date"),
     ]);
     if (catErr) throw catErr;
     if (snapErr) throw snapErr;
     if (balErr) throw balErr;
     if (txnErr) throw txnErr;
     if (goalsErr) throw goalsErr;
+    if (spErr) throw spErr;
     if (stockTxnErr) throw stockTxnErr;
     if (bgErr) throw bgErr;
     if (bgcErr) throw bgcErr;
@@ -236,6 +239,9 @@ async function loadData() {
     });
 
     stockPositions = buildStockPositions(stockTxns || [], txns || [], catMap);
+
+    stockPrices = {};
+    (stockPricesRaw || []).forEach((p) => { stockPrices[p.ticker] = p; });
 
     renderOverview(trend);
 
@@ -1037,6 +1043,15 @@ function renderStockInvested(stockTxns) {
 let stockPositions = {};
 let latestBalanceByAccount = {};
 let latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
+let stockPrices = {}; // ticker -> { price, price_date }，抓不到 Apps Script 即時報價時的收盤價備援
+
+// 股票市值備援順序：Apps Script 即時價 -> account_balances 手動記錄 -> stock_prices 昨日收盤價 × 股數
+function fallbackMarketValue(code, shares) {
+  if (latestBalanceByAccount[code]) return Number(latestBalanceByAccount[code].balance);
+  const p = stockPrices[code];
+  if (p && shares > 0) return Number(p.price) * shares;
+  return null;
+}
 const DIVIDEND_CATEGORY_ID = 3; // category_map 裡「現金股利」固定是 id=3
 
 function buildStockPositions(stockTxns, txns, catMap) {
@@ -1101,9 +1116,7 @@ function enrichWithPosition(stock) {
   const pos = stockPositions[stock.code];
   if (!pos) return stock;
   const avgCost = pos.shares > 0 ? pos.costBasis / pos.shares : null;
-  const marketValue = stock.marketValue != null
-    ? stock.marketValue
-    : (latestBalanceByAccount[stock.code] ? Number(latestBalanceByAccount[stock.code].balance) : null);
+  const marketValue = stock.marketValue != null ? stock.marketValue : fallbackMarketValue(stock.code, pos.shares);
   const unrealizedGain = marketValue != null && pos.shares > 0 ? marketValue - pos.costBasis : null;
   const totalReturn = unrealizedGain != null ? unrealizedGain + pos.realizedGain + pos.dividends : null;
   return {
@@ -1171,7 +1184,7 @@ function renderStocks(stocks) {
     .filter((ticker) => !apiCodes.has(ticker) && stockPositions[ticker].shares > 0.0001)
     .map((ticker) => {
       const pos = stockPositions[ticker];
-      const marketValue = latestBalanceByAccount[ticker] ? Number(latestBalanceByAccount[ticker].balance) : null;
+      const marketValue = fallbackMarketValue(ticker, pos.shares);
       return {
         ticker, code: ticker, name: pos.name || "", shares: pos.shares, price: null,
         marketValue, isTW: pos.market === "TW",
