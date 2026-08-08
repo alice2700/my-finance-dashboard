@@ -567,9 +567,12 @@ function renderCashflow(breakdown) {
 }
 
 // 待銷帳：不列入任何統計，但另外顯示出來，避免看起來像資料憑空消失
+const pendingSelectedIds = new Set();
+
 function renderPendingList(pending, catInfo) {
   const el = document.getElementById("pendingFlow");
   if (!el) return;
+  pendingSelectedIds.clear();
   if (!pending.length) {
     el.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">這段期間沒有待銷帳項目</span></div>';
     return;
@@ -578,6 +581,11 @@ function renderPendingList(pending, catInfo) {
   // 全部待銷帳交易（不限本期）用過的標籤，給 datalist 建議用
   const allTags = [...new Set(allTxns.filter((t) => t.is_pending && t.pending_group).map((t) => t.pending_group))];
   const datalistHtml = `<datalist id="pendingGroupOptions">${allTags.map((t) => `<option value="${t}"></option>`).join("")}</datalist>`;
+
+  const batchBarHtml = `<div class="pending-batch-bar">
+    <input type="text" id="pendingBatchTag" list="pendingGroupOptions" placeholder="輸入標籤，套用到勾選項目" />
+    <button type="button" id="pendingBatchApply">套用（已選 <span id="pendingSelectedCount">0</span>）</button>
+  </div>`;
 
   // 依人工標籤分組，沒標籤的排最後
   const groups = {};
@@ -603,6 +611,7 @@ function renderPendingList(pending, catInfo) {
           const sign = t.type === "income" ? "+" : "-";
           return `<div class="pending-row">
             <div class="flow-tx-row">
+              <input type="checkbox" class="pending-select" data-id="${t.id}" />
               <span class="flow-tx-date">${t.date.slice(5)}</span>
               <span class="flow-tx-note">${info.item_name}｜${t.note || ""}</span>
               <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
@@ -622,27 +631,54 @@ function renderPendingList(pending, catInfo) {
   const netLabel = net > 0 ? `多收 ${fmt(net)}（已計入收入）` : net < 0 ? `多付 ${fmt(-net)}（已計入支出）` : "剛好打平";
   el.innerHTML =
     datalistHtml +
+    batchBarHtml +
     groupsHtml +
     `<div class="flow-item-top" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
       <span class="flow-item-name">整體淨額</span>
       <span class="flow-item-value">${netLabel}</span>
     </div>`;
 
-  el.querySelectorAll(".pending-tag-input").forEach((input) => {
-    input.addEventListener("change", async () => {
-      const id = input.dataset.id;
-      const value = input.value.trim();
-      input.disabled = true;
-      const { error } = await sb.from("transactions").update({ pending_group: value || null }).eq("id", id);
-      input.disabled = false;
-      if (error) {
-        alert("標籤儲存失敗：" + error.message);
-        return;
-      }
+  async function saveTag(ids, value) {
+    const { error } = await sb.from("transactions").update({ pending_group: value || null }).in("id", ids);
+    if (error) {
+      alert("標籤儲存失敗：" + error.message);
+      return false;
+    }
+    ids.forEach((id) => {
       const t = allTxns.find((x) => String(x.id) === String(id));
       if (t) t.pending_group = value || null;
-      renderCashflowView();
     });
+    return true;
+  }
+
+  el.querySelectorAll(".pending-tag-input").forEach((input) => {
+    input.addEventListener("change", async () => {
+      input.disabled = true;
+      const ok = await saveTag([input.dataset.id], input.value.trim());
+      input.disabled = false;
+      if (ok) renderCashflowView();
+    });
+  });
+
+  el.querySelectorAll(".pending-select").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) pendingSelectedIds.add(cb.dataset.id);
+      else pendingSelectedIds.delete(cb.dataset.id);
+      document.getElementById("pendingSelectedCount").textContent = pendingSelectedIds.size;
+    });
+  });
+
+  document.getElementById("pendingBatchApply").addEventListener("click", async () => {
+    if (!pendingSelectedIds.size) {
+      alert("請先勾選要套用標籤的項目");
+      return;
+    }
+    const tagInput = document.getElementById("pendingBatchTag");
+    const btn = document.getElementById("pendingBatchApply");
+    btn.disabled = true;
+    const ok = await saveTag([...pendingSelectedIds], tagInput.value.trim());
+    btn.disabled = false;
+    if (ok) renderCashflowView();
   });
 }
 

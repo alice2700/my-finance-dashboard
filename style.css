@@ -492,6 +492,38 @@ html, body {
   color: var(--muted);
 }
 .pending-tag-input:focus { outline: 2px solid var(--sage); outline-offset: 1px; }
+.pending-select { width: auto; flex-shrink: 0; margin-right: 2px; }
+.pending-batch-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.pending-batch-bar input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--ink);
+}
+.pending-batch-bar button {
+  flex-shrink: 0;
+  border: none;
+  background: var(--sage);
+  color: #fff;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pending-batch-bar button:disabled { opacity: 0.6; }
 
 .card.error { border-color: var(--clay); }
 .card.error code {
