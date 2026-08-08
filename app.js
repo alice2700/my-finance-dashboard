@@ -185,7 +185,7 @@ async function loadData() {
 
     // 每個帳戶在每個月取「當月最新一筆」餘額
     // account_type：cash=活期存款、investment=定存/基金/儲蓄險等、stock=股票
-    const latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
+    latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
     (balances || []).forEach((b) => {
       const d = new Date(b.recorded_at);
       const key = d.getFullYear() + "-" + (d.getMonth() + 1);
@@ -238,7 +238,6 @@ async function loadData() {
     stockPositions = buildStockPositions(stockTxns || [], txns || [], catMap);
 
     renderOverview(trend);
-    renderAssetComposition();
 
     allTxns = txns || [];
     allCatMap = catMap;
@@ -357,37 +356,58 @@ function renderOverview(trend) {
 // 股票分頁載入完成後 renderStocks() 會再呼叫一次補上台股/美股
 let assetCompositionStockTotals = { tw: null, us: null };
 
-function renderAssetComposition() {
+// year/month 省略時顯示最新狀態（含股票分頁即時台股/美股拆分）；
+// 指定 year/month 時顯示該月的歷史快照（活存/定存來自 account_balances 當月最後一筆，
+// 股票沒有逐月拆分資料，改用 asset_snapshots/account_balances 算出的合計 stockPart）
+function renderAssetComposition(year, month) {
   const el = document.getElementById("assetComposition");
+  const labelEl = document.getElementById("assetCompositionLabel");
   if (!el) return;
+
+  const isLatest = year == null || month == null;
+  const key = isLatest ? null : `${year}-${month}`;
+  const source = isLatest ? latestBalanceByAccount : latestByAccountMonth[key] || {};
+
+  if (labelEl) labelEl.textContent = isLatest ? "" : `${year}/${month}`;
 
   const cashAccounts = [];
   const investmentAccounts = [];
-  Object.entries(latestBalanceByAccount).forEach(([name, b]) => {
+  Object.entries(source).forEach(([name, b]) => {
     if (b.account_type === "cash") cashAccounts.push({ name, value: Number(b.balance) });
     else if (b.account_type === "investment") investmentAccounts.push({ name, value: Number(b.balance) });
   });
   cashAccounts.sort((a, b) => b.value - a.value);
   investmentAccounts.sort((a, b) => b.value - a.value);
 
-  const rows = [];
-  cashAccounts.forEach((a) => rows.push({ group: "活存", label: a.name, value: a.value }));
-  investmentAccounts.forEach((a) => rows.push({ group: "定存", label: a.name, value: a.value }));
-  if (assetCompositionStockTotals.tw != null) rows.push({ group: "股票", label: "台股", value: assetCompositionStockTotals.tw });
-  if (assetCompositionStockTotals.us != null) rows.push({ group: "股票", label: "美股", value: assetCompositionStockTotals.us });
+  const stockRows = [];
+  if (isLatest) {
+    if (assetCompositionStockTotals.tw != null) stockRows.push({ name: "台股", value: assetCompositionStockTotals.tw });
+    if (assetCompositionStockTotals.us != null) stockRows.push({ name: "美股", value: assetCompositionStockTotals.us });
+  } else {
+    const trendPoint = overviewTrend.find((t) => t.year === year && t.month === month);
+    if (trendPoint && trendPoint.stockPart) stockRows.push({ name: "股票（合計，無法拆分台美股）", value: trendPoint.stockPart });
+  }
 
-  if (!rows.length) {
-    el.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚無資產資料</span></div>';
+  const groups = [
+    { name: "活存", accounts: cashAccounts },
+    { name: "定存", accounts: investmentAccounts },
+    { name: "股票", accounts: stockRows },
+  ].filter((g) => g.accounts.length);
+
+  if (!groups.length) {
+    el.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">這個月沒有資產紀錄</span></div>';
+    charts.assetComposition && charts.assetComposition.destroy();
     return;
   }
 
-  const total = rows.reduce((sum, r) => sum + r.value, 0);
+  const flatRows = groups.flatMap((g) => g.accounts.map((a) => ({ group: g.name, label: a.name, value: a.value })));
+  const total = flatRows.reduce((sum, r) => sum + r.value, 0);
 
   renderChart("assetComposition", "chartAssetComposition", {
     type: "doughnut",
     data: {
-      labels: rows.map((r) => r.label),
-      datasets: [{ data: rows.map((r) => r.value), backgroundColor: PIE_COLORS, borderWidth: 2, borderColor: "#fff" }],
+      labels: flatRows.map((r) => r.label),
+      datasets: [{ data: flatRows.map((r) => r.value), backgroundColor: PIE_COLORS, borderWidth: 2, borderColor: "#fff" }],
     },
     options: {
       plugins: {
@@ -397,14 +417,34 @@ function renderAssetComposition() {
     },
   });
 
-  el.innerHTML = rows
-    .map(
-      (r) => `<div class="flow-item-top">
-        <span class="flow-item-name">${r.group}｜${r.label}</span>
-        <span class="flow-item-value">${fmt(r.value)}（${total ? ((r.value / total) * 100).toFixed(1) : 0}%）</span>
-      </div>`
-    )
+  el.innerHTML = groups
+    .map((g) => {
+      const groupTotal = g.accounts.reduce((sum, a) => sum + a.value, 0);
+      const itemsHtml = g.accounts
+        .map(
+          (a) => `<div class="flow-item-top">
+            <span class="flow-item-name">${a.name}</span>
+            <span class="flow-item-value">${fmt(a.value)}${total ? `（${((a.value / total) * 100).toFixed(1)}%）` : ""}</span>
+          </div>`
+        )
+        .join("");
+      return `<div class="flow-group">
+        <button class="flow-group-header">
+          <span class="flow-group-name"><span class="flow-caret">▸</span>${g.name}</span>
+          <span class="flow-group-value">${fmt(groupTotal)}</span>
+        </button>
+        <div class="flow-group-body">${itemsHtml}</div>
+      </div>`;
+    })
     .join("");
+
+  el.querySelectorAll(".flow-group-header").forEach((header) => {
+    const body = header.nextElementSibling;
+    header.addEventListener("click", () => {
+      header.classList.toggle("expanded");
+      body.classList.toggle("expanded");
+    });
+  });
 }
 
 function seriesValue(t, series) {
@@ -440,6 +480,7 @@ function renderAssetChart() {
           const t = trend[elements[0].index];
           document.getElementById("assetHoverNote").textContent =
             `${t.year}/${t.month}：${fmt(seriesValue(t, assetSeries))}`;
+          renderAssetComposition(t.year, t.month);
         }
       },
     },
@@ -448,6 +489,7 @@ function renderAssetChart() {
   const resetNote = () => {
     const latest = trend[trend.length - 1];
     note.textContent = `${latest.year}/${latest.month}：${fmt(seriesValue(latest, assetSeries))}`;
+    renderAssetComposition();
   };
   resetNote();
   canvas.onmouseleave = resetNote;
@@ -991,6 +1033,7 @@ function renderStockInvested(stockTxns) {
 // ---------- 股票均價/損益（加權平均成本法，現金股利不影響成本，另外算總報酬） ----------
 let stockPositions = {};
 let latestBalanceByAccount = {};
+let latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
 const DIVIDEND_CATEGORY_ID = 3; // category_map 裡「現金股利」固定是 id=3
 
 function buildStockPositions(stockTxns, txns, catMap) {
