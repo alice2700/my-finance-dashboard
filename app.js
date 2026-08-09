@@ -267,6 +267,12 @@ async function loadData() {
     }
     if (cashflowYear !== null) renderCashflowView();
 
+    if (detailYear === null && latestTxnYear !== null) {
+      detailYear = latestTxnYear;
+      detailMonth = latestTxnMonth;
+    }
+    if (detailYear !== null) renderDetailView();
+
     if (trend.length) {
       renderGoals(buildGoals(goalsRows && goalsRows[0], trend));
       renderYearlyReview(trend, allTxns, goalsRows && goalsRows[0]);
@@ -953,6 +959,164 @@ document.getElementById("cashflowNextMonth").addEventListener("click", () => {
     if (cashflowMonth > 12) { cashflowMonth = 1; cashflowYear += 1; }
   }
   renderCashflowView();
+});
+
+// ---------- 明細：月曆花費熱點（中分類自選） ----------
+let detailYear = null;
+let detailMonth = null;
+let detailSelectedDay = null;
+let detailSelectedMidNames = new Set(["生活支出(變動)"]); // 預設：非固定生活支出
+let detailFilterButtonsBound = false;
+
+const WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
+
+function heatColor(ratio) {
+  if (ratio <= 0) return "var(--bg)";
+  // 從淡橘到深橘，跟 --clay 呼應
+  const alpha = 0.12 + ratio * 0.68;
+  return `rgba(192, 133, 82, ${alpha.toFixed(2)})`;
+}
+
+// chip 每次都整個重畫（元素不多，成本低），「全選」「清除」按鈕的事件只綁一次避免重複綁定
+function renderDetailFilters() {
+  const el = document.getElementById("detailMidNameFilters");
+  if (!el) return;
+  const midNames = [...new Set(Object.values(allCatMap).map((c) => c.mid_name).filter(Boolean))];
+
+  el.innerHTML = midNames
+    .map(
+      (name) => `<label class="filter-chip${detailSelectedMidNames.has(name) ? " active" : ""}" data-mid="${name}">
+        <input type="checkbox" ${detailSelectedMidNames.has(name) ? "checked" : ""} />${name}
+      </label>`
+    )
+    .join("");
+  el.querySelectorAll(".filter-chip").forEach((chip) => {
+    chip.addEventListener("click", (e) => {
+      e.preventDefault();
+      const name = chip.dataset.mid;
+      if (detailSelectedMidNames.has(name)) detailSelectedMidNames.delete(name);
+      else detailSelectedMidNames.add(name);
+      renderDetailView();
+    });
+  });
+
+  if (!detailFilterButtonsBound) {
+    document.getElementById("detailFilterAll").addEventListener("click", () => {
+      const all = [...new Set(Object.values(allCatMap).map((c) => c.mid_name).filter(Boolean))];
+      detailSelectedMidNames = new Set(all);
+      renderDetailView();
+    });
+    document.getElementById("detailFilterNone").addEventListener("click", () => {
+      detailSelectedMidNames = new Set();
+      renderDetailView();
+    });
+    detailFilterButtonsBound = true;
+  }
+}
+
+function renderDetailDayList(day) {
+  const label = document.getElementById("detailDayLabel");
+  const listEl = document.getElementById("detailDayList");
+  if (day == null) {
+    label.textContent = "選一天看逐筆明細";
+    listEl.innerHTML = "";
+    return;
+  }
+  const dateStr = `${detailYear}-${String(detailMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  label.textContent = `${detailYear}/${detailMonth}/${day} 逐筆明細`;
+  const dayTxns = allTxns
+    .filter((t) => {
+      if (t.date !== dateStr) return false;
+      const info = allCatMap[t.category_id];
+      return info && detailSelectedMidNames.has(info.mid_name);
+    })
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  if (!dayTxns.length) {
+    listEl.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">這天沒有符合勾選分類的紀錄</span></div>';
+    return;
+  }
+  listEl.innerHTML = dayTxns
+    .map((t) => {
+      const info = allCatMap[t.category_id] || { item_name: "未分類" };
+      const sign = t.type === "income" ? "+" : "-";
+      const pendingTag = t.is_pending ? "（待銷帳）" : "";
+      return `<div class="flow-tx-row">
+        <span class="flow-tx-note">${info.item_name}${pendingTag}｜${t.note || ""}</span>
+        <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderDetailView() {
+  const monthLabel = document.getElementById("detailMonthLabel");
+  const weekdaysEl = document.getElementById("calendarWeekdays");
+  const gridEl = document.getElementById("calendarGrid");
+  const legendEl = document.getElementById("detailHeatLegend");
+  if (!gridEl) return;
+
+  renderDetailFilters();
+
+  monthLabel.textContent = `${detailYear}/${detailMonth}`;
+  weekdaysEl.innerHTML = WEEKDAY_LABELS.map((w) => `<div class="calendar-weekday">${w}</div>`).join("");
+
+  const daysInMonth = new Date(detailYear, detailMonth, 0).getDate();
+  const firstWeekday = new Date(detailYear, detailMonth - 1, 1).getDay();
+
+  const dayHeat = {}; // day -> 勾選中分類的金額合計
+  const dayHasTxn = new Set();
+  allTxns.forEach((t) => {
+    if (t.is_pending) return;
+    const y = parseInt(t.date.slice(0, 4), 10);
+    const m = parseInt(t.date.slice(5, 7), 10);
+    const d = parseInt(t.date.slice(8, 10), 10);
+    if (y !== detailYear || m !== detailMonth) return;
+    const info = allCatMap[t.category_id];
+    if (info && detailSelectedMidNames.has(info.mid_name)) {
+      dayHasTxn.add(d);
+      dayHeat[d] = (dayHeat[d] || 0) + Math.abs(Number(t.amount));
+    }
+  });
+  const maxHeat = Math.max(0, ...Object.values(dayHeat));
+  legendEl.textContent = maxHeat ? `本月單日最高 ${fmt(maxHeat)}` : "";
+
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push('<div class="calendar-day empty"></div>');
+  for (let d = 1; d <= daysInMonth; d++) {
+    const heat = dayHeat[d] || 0;
+    const ratio = maxHeat ? heat / maxHeat : 0;
+    const classes = ["calendar-day"];
+    if (dayHasTxn.has(d)) classes.push("has-txn");
+    if (d === detailSelectedDay) classes.push("selected");
+    cells.push(
+      `<div class="${classes.join(" ")}" data-day="${d}" style="background:${heatColor(ratio)};">${d}</div>`
+    );
+  }
+  gridEl.innerHTML = cells.join("");
+
+  gridEl.querySelectorAll(".calendar-day[data-day]").forEach((cell) => {
+    cell.addEventListener("click", () => {
+      const day = Number(cell.dataset.day);
+      detailSelectedDay = detailSelectedDay === day ? null : day;
+      renderDetailView();
+    });
+  });
+
+  renderDetailDayList(detailSelectedDay);
+}
+
+document.getElementById("detailPrevMonth").addEventListener("click", () => {
+  detailMonth -= 1;
+  if (detailMonth < 1) { detailMonth = 12; detailYear -= 1; }
+  detailSelectedDay = null;
+  renderDetailView();
+});
+
+document.getElementById("detailNextMonth").addEventListener("click", () => {
+  detailMonth += 1;
+  if (detailMonth > 12) { detailMonth = 1; detailYear += 1; }
+  detailSelectedDay = null;
+  renderDetailView();
 });
 
 document.getElementById("cashflowRangeToggle").addEventListener("click", (e) => {

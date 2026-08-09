@@ -302,6 +302,64 @@ html, body {
 }
 .month-nav-btn:disabled { opacity: 0.35; cursor: default; }
 
+/* 明細：中分類篩選 */
+.filter-row { margin-bottom: 12px; }
+.filter-chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+  cursor: pointer;
+  user-select: none;
+}
+.filter-chip.active { background: var(--sage-soft); border-color: var(--sage); color: var(--ink); font-weight: 600; }
+.filter-chip input { display: none; }
+.filter-actions { display: flex; gap: 10px; }
+.filter-text-btn {
+  border: none;
+  background: none;
+  color: var(--sage);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* 明細：月曆花費熱點 */
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.calendar-weekday {
+  text-align: center;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.calendar-day {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.calendar-day.empty { visibility: hidden; cursor: default; }
+.calendar-day.selected { border-color: var(--sage); font-weight: 600; }
+.calendar-day.has-txn { border-color: var(--border); }
+
 /* 現金流 大類 -> 中類 -> 逐筆明細 */
 .flow-group { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .flow-group:last-child { border-bottom: none; }

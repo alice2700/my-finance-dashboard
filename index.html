@@ -189,6 +189,34 @@
       </div>
     </section>
 
+    <!-- ============ 明細 ============ -->
+    <section class="page hidden" id="page-detail">
+      <div class="month-nav">
+        <button id="detailPrevMonth" class="month-nav-btn" aria-label="上一個">‹</button>
+        <span id="detailMonthLabel">—</span>
+        <button id="detailNextMonth" class="month-nav-btn" aria-label="下一個">›</button>
+      </div>
+      <div class="card">
+        <div class="card-title-row">
+          <div class="card-title">花費熱點</div>
+          <div class="stat-sub" id="detailHeatLegend"></div>
+        </div>
+        <div class="filter-row">
+          <div id="detailMidNameFilters" class="filter-chip-list"></div>
+          <div class="filter-actions">
+            <button type="button" id="detailFilterAll" class="filter-text-btn">全選</button>
+            <button type="button" id="detailFilterNone" class="filter-text-btn">清除</button>
+          </div>
+        </div>
+        <div class="calendar-grid" id="calendarWeekdays"></div>
+        <div class="calendar-grid" id="calendarGrid"></div>
+      </div>
+      <div class="card">
+        <div class="card-title" id="detailDayLabel">選一天看逐筆明細</div>
+        <div id="detailDayList" class="flow-list"></div>
+      </div>
+    </section>
+
     <!-- ============ 輸入 ============ -->
     <section class="page hidden" id="page-input">
       <div class="card">
@@ -276,6 +304,9 @@
     </button>
     <button class="tab" data-page="stocks">
       <span>股票</span>
+    </button>
+    <button class="tab" data-page="detail">
+      <span>明細</span>
     </button>
     <button class="tab" data-page="input">
       <span>輸入</span>
