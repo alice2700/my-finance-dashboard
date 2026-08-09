@@ -100,6 +100,50 @@ function recentMonthlyYoY(revenueRows, monthsToCheck) {
   return results;
 }
 
+async function fetchIndustryCategory(ticker) {
+  const res = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${ticker}`);
+  if (!res.ok) throw new Error(`TaiwanStockInfo fetch failed for ${ticker}: ${res.status}`);
+  const body = await res.json();
+  if (body.status !== 200) throw new Error(`FinMind error for ${ticker}: ${body.msg}`);
+  const categories = [...new Set((body.data || []).map((r) => r.industry_category).filter(Boolean))];
+  return categories.join("、") || null;
+}
+
+async function fetchMonthReturn(ticker) {
+  const start = new Date();
+  start.setDate(start.getDate() - 35);
+  const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${ticker}&start_date=${start.toISOString().slice(0, 10)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`TaiwanStockPrice fetch failed for ${ticker}: ${res.status}`);
+  const body = await res.json();
+  if (body.status !== 200) throw new Error(`FinMind error for ${ticker}: ${body.msg}`);
+  const rows = (body.data || []).filter((r) => r.close != null).sort((a, b) => (a.date < b.date ? -1 : 1));
+  if (rows.length < 2) return null;
+  const first = rows[0].close;
+  const last = rows[rows.length - 1].close;
+  if (!first) return null;
+  return { pctChange: (last - first) / first, fromDate: rows[0].date, toDate: rows[rows.length - 1].date };
+}
+
+// 只對通過篩選的候選股票（數量少）額外抓產業別和近1個月股價表現，方便使用者快速認識公司
+async function enrichCandidates(candidates) {
+  const enriched = [];
+  for (const c of candidates) {
+    try {
+      const [industryCategory, monthReturn] = await Promise.all([
+        fetchIndustryCategory(c.stock_id),
+        fetchMonthReturn(c.stock_id),
+      ]);
+      enriched.push({ ...c, industryCategory, monthReturn });
+    } catch (err) {
+      console.error(`Enrich failed for ${c.stock_id}: ${err.message}`);
+      enriched.push({ ...c, industryCategory: null, monthReturn: null });
+    }
+    await sleep(1500);
+  }
+  return enriched;
+}
+
 async function saveResults(candidates) {
   const runDate = new Date().toISOString().slice(0, 10);
   // 先清掉今天已經跑過的舊結果，避免同一天重跑造成重複
@@ -116,7 +160,12 @@ async function saveResults(candidates) {
     run_date: runDate,
     stock_id: c.stock_id,
     stock_name: c.stock_name,
-    detail: { pe_ratio: c.pe_ratio, monthly_yoy: c.monthlyYoy },
+    detail: {
+      pe_ratio: c.pe_ratio,
+      monthly_yoy: c.monthlyYoy,
+      industry_category: c.industryCategory,
+      month_return: c.monthReturn,
+    },
   }));
   const res = await fetch(`${SUPABASE_URL}/rest/v1/screener_results`, {
     method: "POST",
@@ -149,5 +198,9 @@ for (const stock of candidates1) {
 }
 
 console.log(`Final candidates: ${passed.length}`);
-await saveResults(passed);
+
+console.log("Enriching candidates with industry category + 1-month price return...");
+const enriched = await enrichCandidates(passed);
+
+await saveResults(enriched);
 console.log("Done.");
