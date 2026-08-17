@@ -188,6 +188,19 @@
         <div class="card-title">美股</div>
         <div id="stockTableUS" class="stock-table"></div>
       </div>
+
+      <div class="card">
+        <div class="month-nav" style="margin-bottom:14px;">
+          <button id="divPrevYear" class="month-nav-btn" aria-label="上一年">‹</button>
+          <span id="divYearLabel">—</span>
+          <button id="divNextYear" class="month-nav-btn" aria-label="下一年">›</button>
+        </div>
+        <div class="card-title">股利月曆</div>
+        <canvas id="chartDividendMonthly" height="160"></canvas>
+        <div class="dividend-table-wrap">
+          <table class="dividend-table" id="dividendTable"></table>
+        </div>
+      </div>
     </section>
 
     <!-- ============ 明細 ============ -->

@@ -612,6 +612,26 @@ html, body {
 }
 .pending-batch-bar button:disabled { opacity: 0.6; }
 
+/* 股票：股利月曆 */
+.dividend-table-wrap { overflow-x: auto; margin-top: 10px; }
+.dividend-table { border-collapse: collapse; font-size: 10px; white-space: nowrap; }
+.dividend-table th, .dividend-table td {
+  padding: 6px 7px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+.dividend-table th { color: var(--muted); font-weight: 500; }
+.dividend-table td.dividend-ticker, .dividend-table th.dividend-ticker {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 600;
+}
+.dividend-table td.has-value { color: var(--ink); background: var(--sage-soft); }
+.dividend-table td.dividend-total { font-weight: 600; color: var(--ink); }
+
 .card.error { border-color: var(--clay); }
 .card.error code {
   background: var(--clay-soft);

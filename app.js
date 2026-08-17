@@ -274,6 +274,8 @@ async function loadData() {
     }
     if (detailYear !== null) renderDetailView();
 
+    renderDividendCalendar();
+
     if (trend.length) {
       renderGoals(buildGoals(goalsRows && goalsRows[0], trend));
       renderYearlyReview(trend, allTxns, goalsRows && goalsRows[0]);
@@ -1488,6 +1490,91 @@ function renderStocks(stocks) {
   renderStockTable(twEl, merged.filter((s) => s.isTW), total);
   renderStockTable(usEl, merged.filter((s) => !s.isTW), total);
 }
+
+// ---------- 股票：股利月曆 ----------
+let dividendYear = null;
+
+function compactAmount(n) {
+  return Math.round(n).toLocaleString("zh-TW");
+}
+
+function renderDividendCalendar() {
+  const tableEl = document.getElementById("dividendTable");
+  const yearLabel = document.getElementById("divYearLabel");
+  if (!tableEl) return;
+
+  const divTxns = allTxns.filter((t) => t.category_id === DIVIDEND_CATEGORY_ID && t.type === "income");
+  const years = [...new Set(divTxns.map((t) => parseInt(t.date.slice(0, 4), 10)))].sort((a, b) => a - b);
+
+  if (!years.length) {
+    yearLabel.textContent = "—";
+    tableEl.innerHTML = "";
+    charts.dividendMonthly && charts.dividendMonthly.destroy();
+    return;
+  }
+  if (dividendYear === null || !years.includes(dividendYear)) dividendYear = years[years.length - 1];
+  yearLabel.textContent = dividendYear + "年";
+  document.getElementById("divPrevYear").disabled = dividendYear <= years[0];
+  document.getElementById("divNextYear").disabled = dividendYear >= years[years.length - 1];
+
+  const grid = {}; // ticker -> [12 個月金額]
+  const monthTotals = new Array(12).fill(0);
+  divTxns.forEach((t) => {
+    if (parseInt(t.date.slice(0, 4), 10) !== dividendYear) return;
+    const m = parseInt(t.date.slice(5, 7), 10);
+    const ticker = (t.note || "").trim().toUpperCase();
+    if (!ticker) return;
+    if (!grid[ticker]) grid[ticker] = new Array(12).fill(0);
+    grid[ticker][m - 1] += Number(t.amount);
+    monthTotals[m - 1] += Number(t.amount);
+  });
+
+  renderChart("dividendMonthly", "chartDividendMonthly", {
+    type: "bar",
+    data: {
+      labels: monthTotals.map((_, i) => i + 1 + "月"),
+      datasets: [{ data: monthTotals, backgroundColor: COLOR_SAGE, borderRadius: 4 }],
+    },
+    options: {
+      ...baseChartOptions(),
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => fmt(ctx.raw) } } },
+    },
+  });
+
+  const tickers = Object.keys(grid).sort((a, b) => {
+    const totalA = grid[a].reduce((s, v) => s + v, 0);
+    const totalB = grid[b].reduce((s, v) => s + v, 0);
+    return totalB - totalA;
+  });
+
+  if (!tickers.length) {
+    tableEl.innerHTML = '<tr><td class="dividend-ticker">這年沒有股利紀錄</td></tr>';
+    return;
+  }
+
+  const headerRow =
+    '<tr><th class="dividend-ticker">標的</th>' +
+    Array.from({ length: 12 }, (_, i) => `<th>${i + 1}月</th>`).join("") +
+    "<th>合計</th></tr>";
+  const bodyRows = tickers
+    .map((ticker) => {
+      const vals = grid[ticker];
+      const total = vals.reduce((s, v) => s + v, 0);
+      const cells = vals.map((v) => `<td class="${v ? "has-value" : ""}">${v ? compactAmount(v) : "－"}</td>`).join("");
+      return `<tr><td class="dividend-ticker">${ticker}</td>${cells}<td class="dividend-total">${compactAmount(total)}</td></tr>`;
+    })
+    .join("");
+  tableEl.innerHTML = headerRow + bodyRows;
+}
+
+document.getElementById("divPrevYear").addEventListener("click", () => {
+  dividendYear -= 1;
+  renderDividendCalendar();
+});
+document.getElementById("divNextYear").addEventListener("click", () => {
+  dividendYear += 1;
+  renderDividendCalendar();
+});
 
 // ===========================================================
 // 輸入：新增資產快照（account_balances）
