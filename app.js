@@ -1509,6 +1509,7 @@ function renderDividendCalendar() {
   if (!years.length) {
     yearLabel.textContent = "—";
     tableEl.innerHTML = "";
+    document.getElementById("dividendYearTotal").textContent = "";
     charts.dividendMonthly && charts.dividendMonthly.destroy();
     return;
   }
@@ -1528,6 +1529,9 @@ function renderDividendCalendar() {
     grid[ticker][m - 1] += Number(t.amount);
     monthTotals[m - 1] += Number(t.amount);
   });
+
+  const yearTotal = monthTotals.reduce((s, v) => s + v, 0);
+  document.getElementById("dividendYearTotal").textContent = `年度累計 ${fmt(yearTotal)}`;
 
   renderChart("dividendMonthly", "chartDividendMonthly", {
     type: "bar",
