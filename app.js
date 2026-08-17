@@ -146,6 +146,7 @@ async function loadData() {
     });
     budgetGroups = Object.values(groupById);
 
+    allCategories = categories || [];
     const catMap = {};
     (categories || []).forEach((c) => { catMap[c.id] = { item_name: c.item_name, mid_name: c.mid_name || "未分類" }; });
 
@@ -967,6 +968,7 @@ let detailMonth = null;
 let detailSelectedDay = null;
 let detailSelectedMidNames = new Set(["生活支出(變動)"]); // 預設：非固定生活支出
 let detailFilterButtonsBound = false;
+let detailEditingId = null;
 
 const WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
 
@@ -1040,12 +1042,96 @@ function renderDetailDayList(day) {
       const info = allCatMap[t.category_id] || { item_name: "未分類" };
       const sign = t.type === "income" ? "+" : "-";
       const pendingTag = t.is_pending ? "（待銷帳）" : "";
-      return `<div class="flow-tx-row">
+      const rowHtml = `<button type="button" class="detail-tx-row" data-id="${t.id}">
         <span class="flow-tx-note">${info.item_name}${pendingTag}｜${t.note || ""}</span>
         <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
-      </div>`;
+      </button>`;
+      return rowHtml + (String(t.id) === String(detailEditingId) ? renderDetailEditForm(t) : "");
     })
     .join("");
+
+  listEl.querySelectorAll(".detail-tx-row").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      detailEditingId = String(detailEditingId) === btn.dataset.id ? null : btn.dataset.id;
+      renderDetailDayList(day);
+    });
+  });
+
+  if (detailEditingId) wireDetailEditForm(day);
+}
+
+function renderDetailEditForm(t) {
+  const catOptions = allCategories
+    .filter((c) => c.type === t.type)
+    .map((c) => `<option value="${c.id}"${c.id === t.category_id ? " selected" : ""}>${c.mid_name}｜${c.item_name}</option>`)
+    .join("");
+  const noteVal = (t.note || "").replace(/"/g, "&quot;");
+  return `<div class="detail-edit-form entry-form">
+    <label>日期<input type="date" class="edit-date" value="${t.date}" /></label>
+    <label>金額<input type="number" class="edit-amount" value="${t.amount}" step="1" inputmode="decimal" /></label>
+    <label>類型
+      <select class="edit-type">
+        <option value="expense"${t.type === "expense" ? " selected" : ""}>支出</option>
+        <option value="income"${t.type === "income" ? " selected" : ""}>收入</option>
+      </select>
+    </label>
+    <label>分類<select class="edit-category">${catOptions}</select></label>
+    <label>備註<input type="text" class="edit-note" value="${noteVal}" /></label>
+    <label class="checkbox-label"><input type="checkbox" class="edit-pending"${t.is_pending ? " checked" : ""} />待銷帳</label>
+    <div style="display:flex;gap:8px;">
+      <button type="button" class="edit-save" data-id="${t.id}" style="flex:1;">儲存</button>
+      <button type="button" class="edit-cancel" style="flex:1;background:var(--card);color:var(--ink);border:1px solid var(--border);">取消</button>
+    </div>
+    <p class="edit-status entry-message hidden"></p>
+  </div>`;
+}
+
+function wireDetailEditForm(day) {
+  const form = document.querySelector(".detail-edit-form");
+  if (!form) return;
+  const typeSelect = form.querySelector(".edit-type");
+  const catSelect = form.querySelector(".edit-category");
+
+  typeSelect.addEventListener("change", () => {
+    catSelect.innerHTML = allCategories
+      .filter((c) => c.type === typeSelect.value)
+      .map((c) => `<option value="${c.id}">${c.mid_name}｜${c.item_name}</option>`)
+      .join("");
+  });
+
+  form.querySelector(".edit-cancel").addEventListener("click", () => {
+    detailEditingId = null;
+    renderDetailDayList(day);
+  });
+
+  form.querySelector(".edit-save").addEventListener("click", async () => {
+    const saveBtn = form.querySelector(".edit-save");
+    const id = saveBtn.dataset.id;
+    const statusEl = form.querySelector(".edit-status");
+    const updates = {
+      date: form.querySelector(".edit-date").value,
+      amount: Number(form.querySelector(".edit-amount").value),
+      type: typeSelect.value,
+      category_id: Number(catSelect.value),
+      note: form.querySelector(".edit-note").value.trim() || null,
+      is_pending: form.querySelector(".edit-pending").checked,
+    };
+    saveBtn.disabled = true;
+    statusEl.classList.remove("hidden");
+    statusEl.className = "edit-status entry-message";
+    statusEl.textContent = "儲存中...";
+    const { error } = await sb.from("transactions").update(updates).eq("id", id);
+    saveBtn.disabled = false;
+    if (error) {
+      statusEl.textContent = "儲存失敗：" + error.message;
+      statusEl.className = "edit-status entry-message error";
+      return;
+    }
+    const t = allTxns.find((x) => String(x.id) === String(id));
+    if (t) Object.assign(t, updates);
+    detailEditingId = null;
+    renderDetailView();
+  });
 }
 
 function renderDetailView() {
@@ -1210,6 +1296,7 @@ let stockPositions = {};
 let latestBalanceByAccount = {};
 let latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
 let allStockTxns = [];
+let allCategories = [];
 let stockPrices = {}; // ticker -> { price, price_date }，抓不到 Apps Script 即時報價時的收盤價備援
 
 // 股票市值備援順序：Apps Script 即時價 -> account_balances 手動記錄 -> stock_prices 昨日收盤價 × 股數
@@ -1727,6 +1814,128 @@ if (stockCsvConfirmBtn) {
     allStockTxns = allStockTxns.concat(toInsert);
     document.getElementById("stockCsvPreview").innerHTML = "";
     document.getElementById("stockCsvFile").value = "";
+  });
+}
+
+// ===========================================================
+// 輸入：信用卡/銀行明細比對
+// ===========================================================
+const RECONCILE_DATE_TOLERANCE_DAYS = 3;
+
+function rocDateToIsoLocal(rocDate) {
+  // "115/08/12" -> "2026-08-12"
+  const parts = String(rocDate).trim().split("/");
+  if (parts.length !== 3) return null;
+  const year = parseInt(parts[0], 10) + 1911;
+  return `${year}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
+}
+
+function dateDiffDays(isoA, isoB) {
+  const a = new Date(isoA + "T00:00:00");
+  const b = new Date(isoB + "T00:00:00");
+  return Math.round((a - b) / 86400000);
+}
+
+// 聯邦銀行信用卡對帳單：前幾列是帳單摘要，接著是逐筆消費明細，
+// 中間穿插「上期金額」「卡片名稱」這類非交易列（這些列的入帳日/消費日都是空的，用來排除）
+function parseUnionBankStatement(rows) {
+  // 找「帳單結帳日」摘要列，抓年份基準（消費日只有 MM/DD，沒有年份）
+  let statementYear = null;
+  let statementMonth = null;
+  for (let i = 0; i < rows.length - 1; i++) {
+    const col = rows[i].findIndex((c) => String(c).trim() === "帳單結帳日");
+    if (col !== -1) {
+      const iso = rocDateToIsoLocal(rows[i + 1][col]);
+      if (iso) { statementYear = parseInt(iso.slice(0, 4), 10); statementMonth = parseInt(iso.slice(5, 7), 10); }
+      break;
+    }
+  }
+  if (!statementYear) return { format: null, results: [] };
+
+  const headerIdx = rows.findIndex((r) => r.includes("入帳日") && r.includes("消費日") && r.includes("消費明細"));
+  if (headerIdx === -1) return { format: null, results: [] };
+  const header = rows[headerIdx];
+  const postedCol = header.indexOf("入帳日");
+  const spendCol = header.indexOf("消費日");
+  const noteCol = header.indexOf("消費明細");
+  const twdCol = header.indexOf("新臺幣金額");
+
+  const results = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const posted = r[postedCol];
+    const spend = r[spendCol];
+    if (!posted || !spend) continue; // 非交易列（摘要/卡片標題），跳過
+    const [mm, dd] = String(spend).trim().split("/");
+    if (!mm || !dd) continue;
+    let year = statementYear;
+    if (parseInt(mm, 10) > statementMonth) year -= 1; // 跨年時，帳單月之後的月份代表是去年
+    const date = `${year}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+    const amount = parseNum(r[twdCol]);
+    if (!amount) continue;
+    results.push({ date, amount, note: (r[noteCol] || "").toString().trim() });
+  }
+  return { format: "聯邦銀行", results };
+}
+
+function matchReconcileRow(row) {
+  const candidates = allTxns.filter((t) => {
+    if (Math.abs(Math.abs(Number(t.amount)) - Math.abs(row.amount)) > 0.5) return false;
+    return Math.abs(dateDiffDays(t.date, row.date)) <= RECONCILE_DATE_TOLERANCE_DAYS;
+  });
+  return candidates;
+}
+
+const reconcileFileInput = document.getElementById("reconcileFile");
+if (reconcileFileInput) {
+  reconcileFileInput.addEventListener("change", async () => {
+    const file = reconcileFileInput.files[0];
+    if (!file) return;
+    const statusEl = document.getElementById("reconcileStatus");
+    const resultEl = document.getElementById("reconcileResult");
+    statusEl.textContent = "解析中...";
+    resultEl.innerHTML = "";
+
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+
+    const { format, results } = parseUnionBankStatement(rows);
+    if (!format) {
+      statusEl.textContent = "無法辨識這份對帳單的格式（目前只支援聯邦銀行），麻煩提供這張卡的範例讓我加解析規則";
+      return;
+    }
+
+    const missing = [];
+    const ambiguous = [];
+    let matchedCount = 0;
+    results.forEach((row) => {
+      const candidates = matchReconcileRow(row);
+      if (candidates.length === 0) missing.push(row);
+      else if (candidates.length > 1) ambiguous.push(row);
+      else matchedCount++;
+    });
+
+    statusEl.textContent = `${format}，共 ${results.length} 筆：已比對到 ${matchedCount} 筆，可能漏記 ${missing.length} 筆，不確定 ${ambiguous.length} 筆`;
+
+    const renderRow = (row) => `<div class="flow-tx-row">
+      <span class="flow-tx-date">${row.date.slice(5)}</span>
+      <span class="flow-tx-note">${row.note}</span>
+      <span class="flow-tx-amount">${fmt(Math.abs(row.amount))}</span>
+    </div>`;
+
+    let html = "";
+    if (missing.length) {
+      html += `<div class="card-title" style="margin-top:14px;">⚠️ 明細有、可能沒記到（${missing.length}）</div>` + missing.map(renderRow).join("");
+    }
+    if (ambiguous.length) {
+      html += `<div class="card-title" style="margin-top:14px;">❓ 不確定，麻煩自己確認（${ambiguous.length}）</div>` + ambiguous.map(renderRow).join("");
+    }
+    if (!missing.length && !ambiguous.length) {
+      html += '<div class="flow-item-top" style="margin-top:14px;"><span class="flow-item-name">全部都比對到了</span></div>';
+    }
+    resultEl.innerHTML = html;
   });
 }
 

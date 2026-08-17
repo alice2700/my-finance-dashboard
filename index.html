@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="style.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -282,6 +283,13 @@
         <div id="stockCsvStatus" class="entry-message" style="margin-top:8px;"></div>
         <div id="stockCsvPreview" style="margin-top:10px;"></div>
         <button type="button" id="stockCsvConfirm" class="hidden" style="margin-top:10px;width:100%;border:none;border-radius:10px;padding:12px;font-size:15px;font-weight:600;font-family:inherit;background:var(--sage);color:#fff;cursor:pointer;">確認匯入</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">信用卡/銀行明細比對</div>
+        <input type="file" id="reconcileFile" accept=".csv,.xlsx,.xls,text/csv" class="entry-form" style="padding:10px;" />
+        <div id="reconcileStatus" class="entry-message" style="margin-top:8px;"></div>
+        <div id="reconcileResult" style="margin-top:10px;"></div>
       </div>
     </section>
 
