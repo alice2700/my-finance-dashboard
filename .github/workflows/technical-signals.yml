@@ -1,0 +1,21 @@
+name: Technical Signals Refresh
+
+on:
+  workflow_dispatch: {} # run manually when needed (weekly is plenty since it's a weekly-chart signal)
+
+jobs:
+  signals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Compute 20-week MA buy/sell signals
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/technical-signals.mjs
