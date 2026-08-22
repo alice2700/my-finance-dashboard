@@ -170,6 +170,18 @@
           <span class="goal-target">本月投入（買進，不含除息）</span>
         </div>
         <div class="goal-note" id="stockYearInvestedNote"></div>
+
+        <div class="month-nav" style="margin:16px 0 10px;">
+          <button id="investPrevYear" class="month-nav-btn" aria-label="上一年">‹</button>
+          <span id="investYearLabel">—</span>
+          <button id="investNextYear" class="month-nav-btn" aria-label="下一年">›</button>
+        </div>
+        <canvas id="chartInvestMonthly" height="160"></canvas>
+        <div class="segmented" style="margin:10px 0;">
+          <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);margin-right:12px;"><span style="width:9px;height:9px;border-radius:50%;background:var(--sage);display:inline-block;"></span>定期定額</span>
+          <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);"><span style="width:9px;height:9px;border-radius:50%;background:var(--clay);display:inline-block;"></span>單筆</span>
+        </div>
+        <div id="investMonthlyList"></div>
       </div>
     </section>
 

@@ -117,7 +117,7 @@ async function loadData() {
       sb.from("account_balances").select("account_name,account_type,balance,recorded_at").order("recorded_at"),
       sb.from("transactions").select("id,date,amount,type,category_id,note,is_special,is_pending,pending_group").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
-      sb.from("stock_transactions").select("ticker,market,stock_name,trade_date,side,shares,amount_twd").limit(5000),
+      sb.from("stock_transactions").select("id,ticker,market,stock_name,trade_date,side,shares,amount_twd,buy_type").limit(5000),
       sb.from("budget_groups").select("id,name,mode"),
       sb.from("budget_group_categories").select("budget_group_id,category_id"),
       sb.from("budget_amounts").select("budget_group_id,year,month,amount"),
@@ -282,6 +282,7 @@ async function loadData() {
     }
 
     renderStockInvested(stockTxns);
+    renderInvestCalendar();
 
     document.getElementById("updatedAt").textContent =
       "更新於 " + new Date().toLocaleString("zh-TW", { hour12: false });
@@ -974,11 +975,12 @@ let detailEditingId = null;
 
 const WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
 
-function heatColor(ratio) {
-  if (ratio <= 0) return "var(--bg)";
-  // 從淡橘到深橘，跟 --clay 呼應
+// value 為正（該日勾選分類淨額是收入）顯示綠色系，負（淨支出）維持橘紅色系
+function heatColor(value, maxAbs) {
+  if (!value || !maxAbs) return "var(--bg)";
+  const ratio = Math.min(1, Math.abs(value) / maxAbs);
   const alpha = 0.12 + ratio * 0.68;
-  return `rgba(192, 133, 82, ${alpha.toFixed(2)})`;
+  return value > 0 ? `rgba(124, 148, 115, ${alpha.toFixed(2)})` : `rgba(192, 133, 82, ${alpha.toFixed(2)})`;
 }
 
 // chip 每次都整個重畫（元素不多，成本低），「全選」「清除」按鈕的事件只綁一次避免重複綁定
@@ -1018,6 +1020,8 @@ function renderDetailFilters() {
   }
 }
 
+let detailAddingNew = false;
+
 function renderDetailDayList(day) {
   const label = document.getElementById("detailDayLabel");
   const listEl = document.getElementById("detailDayList");
@@ -1035,62 +1039,78 @@ function renderDetailDayList(day) {
       return info && detailSelectedMidNames.has(info.mid_name);
     })
     .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
-  if (!dayTxns.length) {
-    listEl.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">這天沒有符合勾選分類的紀錄</span></div>';
-    return;
-  }
-  listEl.innerHTML = dayTxns
-    .map((t) => {
-      const info = allCatMap[t.category_id] || { item_name: "未分類" };
-      const sign = t.type === "income" ? "+" : "-";
-      const pendingTag = t.is_pending ? "（待銷帳）" : "";
-      const rowHtml = `<button type="button" class="detail-tx-row" data-id="${t.id}">
-        <span class="flow-tx-note">${info.item_name}${pendingTag}｜${t.note || ""}</span>
-        <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
-      </button>`;
-      return rowHtml + (String(t.id) === String(detailEditingId) ? renderDetailEditForm(t) : "");
-    })
-    .join("");
+
+  const addBtnHtml = `<button type="button" id="detailAddNewBtn" class="detail-add-btn">＋ 新增一筆</button>`;
+  const addFormHtml = detailAddingNew ? renderDetailTxForm(null, dateStr) : "";
+
+  const rowsHtml = dayTxns.length
+    ? dayTxns
+        .map((t) => {
+          const info = allCatMap[t.category_id] || { item_name: "未分類" };
+          const sign = t.type === "income" ? "+" : "-";
+          const pendingTag = t.is_pending ? "（待銷帳）" : "";
+          const rowHtml = `<button type="button" class="detail-tx-row" data-id="${t.id}">
+            <span class="flow-tx-note">${info.item_name}${pendingTag}｜${t.note || ""}</span>
+            <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
+          </button>`;
+          return rowHtml + (String(t.id) === String(detailEditingId) ? renderDetailTxForm(t, dateStr) : "");
+        })
+        .join("")
+    : '<div class="flow-item-top"><span class="flow-item-name">這天沒有符合勾選分類的紀錄</span></div>';
+
+  listEl.innerHTML = addBtnHtml + addFormHtml + rowsHtml;
+
+  document.getElementById("detailAddNewBtn").addEventListener("click", () => {
+    detailAddingNew = !detailAddingNew;
+    detailEditingId = null;
+    renderDetailDayList(day);
+  });
 
   listEl.querySelectorAll(".detail-tx-row").forEach((btn) => {
     btn.addEventListener("click", () => {
       detailEditingId = String(detailEditingId) === btn.dataset.id ? null : btn.dataset.id;
+      detailAddingNew = false;
       renderDetailDayList(day);
     });
   });
 
-  if (detailEditingId) wireDetailEditForm(day);
+  if (detailEditingId || detailAddingNew) wireDetailTxForm(day);
 }
 
-function renderDetailEditForm(t) {
+// t 為 null 代表新增；有值代表編輯既有的那一筆
+function renderDetailTxForm(t, dateStr) {
+  const isNew = !t;
+  const type = t ? t.type : "expense";
   const catOptions = allCategories
-    .filter((c) => c.type === t.type)
-    .map((c) => `<option value="${c.id}"${c.id === t.category_id ? " selected" : ""}>${c.mid_name}｜${c.item_name}</option>`)
+    .filter((c) => c.type === type)
+    .map((c) => `<option value="${c.id}"${t && c.id === t.category_id ? " selected" : ""}>${c.mid_name}｜${c.item_name}</option>`)
     .join("");
-  const noteVal = (t.note || "").replace(/"/g, "&quot;");
-  return `<div class="detail-edit-form entry-form">
-    <label>日期<input type="date" class="edit-date" value="${t.date}" /></label>
-    <label>金額<input type="number" class="edit-amount" value="${t.amount}" step="1" inputmode="decimal" /></label>
+  const noteVal = t ? (t.note || "").replace(/"/g, "&quot;") : "";
+  return `<div class="detail-edit-form entry-form" data-mode="${isNew ? "new" : "edit"}" data-id="${t ? t.id : ""}">
+    <label>日期<input type="date" class="edit-date" value="${t ? t.date : dateStr}" /></label>
+    <label>金額<input type="number" class="edit-amount" value="${t ? t.amount : ""}" step="1" inputmode="decimal" /></label>
     <label>類型
       <select class="edit-type">
-        <option value="expense"${t.type === "expense" ? " selected" : ""}>支出</option>
-        <option value="income"${t.type === "income" ? " selected" : ""}>收入</option>
+        <option value="expense"${type === "expense" ? " selected" : ""}>支出</option>
+        <option value="income"${type === "income" ? " selected" : ""}>收入</option>
       </select>
     </label>
     <label>分類<select class="edit-category">${catOptions}</select></label>
     <label>備註<input type="text" class="edit-note" value="${noteVal}" /></label>
-    <label class="checkbox-label"><input type="checkbox" class="edit-pending"${t.is_pending ? " checked" : ""} />待銷帳</label>
+    <label class="checkbox-label"><input type="checkbox" class="edit-pending"${t && t.is_pending ? " checked" : ""} />待銷帳</label>
     <div style="display:flex;gap:8px;">
-      <button type="button" class="edit-save" data-id="${t.id}" style="flex:1;">儲存</button>
+      <button type="button" class="edit-save" style="flex:1;">${isNew ? "新增" : "儲存"}</button>
       <button type="button" class="edit-cancel" style="flex:1;background:var(--card);color:var(--ink);border:1px solid var(--border);">取消</button>
+      ${isNew ? "" : '<button type="button" class="edit-delete" style="flex:1;background:var(--card);color:var(--clay);border:1px solid var(--clay);">刪除</button>'}
     </div>
     <p class="edit-status entry-message hidden"></p>
   </div>`;
 }
 
-function wireDetailEditForm(day) {
+function wireDetailTxForm(day) {
   const form = document.querySelector(".detail-edit-form");
   if (!form) return;
+  const isNew = form.dataset.mode === "new";
   const typeSelect = form.querySelector(".edit-type");
   const catSelect = form.querySelector(".edit-category");
 
@@ -1103,14 +1123,14 @@ function wireDetailEditForm(day) {
 
   form.querySelector(".edit-cancel").addEventListener("click", () => {
     detailEditingId = null;
+    detailAddingNew = false;
     renderDetailDayList(day);
   });
 
   form.querySelector(".edit-save").addEventListener("click", async () => {
     const saveBtn = form.querySelector(".edit-save");
-    const id = saveBtn.dataset.id;
     const statusEl = form.querySelector(".edit-status");
-    const updates = {
+    const fields = {
       date: form.querySelector(".edit-date").value,
       amount: Number(form.querySelector(".edit-amount").value),
       type: typeSelect.value,
@@ -1121,8 +1141,24 @@ function wireDetailEditForm(day) {
     saveBtn.disabled = true;
     statusEl.classList.remove("hidden");
     statusEl.className = "edit-status entry-message";
-    statusEl.textContent = "儲存中...";
-    const { error } = await sb.from("transactions").update(updates).eq("id", id);
+    statusEl.textContent = isNew ? "新增中..." : "儲存中...";
+
+    if (isNew) {
+      const { data, error } = await sb.from("transactions").insert(fields).select().single();
+      saveBtn.disabled = false;
+      if (error) {
+        statusEl.textContent = "新增失敗：" + error.message;
+        statusEl.className = "edit-status entry-message error";
+        return;
+      }
+      allTxns.push(data);
+      detailAddingNew = false;
+      renderDetailView();
+      return;
+    }
+
+    const id = form.dataset.id;
+    const { error } = await sb.from("transactions").update(fields).eq("id", id);
     saveBtn.disabled = false;
     if (error) {
       statusEl.textContent = "儲存失敗：" + error.message;
@@ -1130,10 +1166,33 @@ function wireDetailEditForm(day) {
       return;
     }
     const t = allTxns.find((x) => String(x.id) === String(id));
-    if (t) Object.assign(t, updates);
+    if (t) Object.assign(t, fields);
     detailEditingId = null;
     renderDetailView();
   });
+
+  const deleteBtn = form.querySelector(".edit-delete");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", async () => {
+      const id = form.dataset.id;
+      const statusEl = form.querySelector(".edit-status");
+      if (!confirm("確定要刪除這筆紀錄嗎？這個動作沒辦法復原。")) return;
+      deleteBtn.disabled = true;
+      statusEl.classList.remove("hidden");
+      statusEl.className = "edit-status entry-message";
+      statusEl.textContent = "刪除中...";
+      const { error } = await sb.from("transactions").delete().eq("id", id);
+      deleteBtn.disabled = false;
+      if (error) {
+        statusEl.textContent = "刪除失敗：" + error.message;
+        statusEl.className = "edit-status entry-message error";
+        return;
+      }
+      allTxns = allTxns.filter((x) => String(x.id) !== String(id));
+      detailEditingId = null;
+      renderDetailView();
+    });
+  }
 }
 
 function renderDetailView() {
@@ -1162,22 +1221,22 @@ function renderDetailView() {
     const info = allCatMap[t.category_id];
     if (info && detailSelectedMidNames.has(info.mid_name)) {
       dayHasTxn.add(d);
-      dayHeat[d] = (dayHeat[d] || 0) + Math.abs(Number(t.amount));
+      const signed = (t.type === "income" ? 1 : -1) * Math.abs(Number(t.amount));
+      dayHeat[d] = (dayHeat[d] || 0) + signed;
     }
   });
-  const maxHeat = Math.max(0, ...Object.values(dayHeat));
-  legendEl.textContent = maxHeat ? `本月單日最高 ${fmt(maxHeat)}` : "";
+  const maxAbsHeat = Math.max(0, ...Object.values(dayHeat).map((v) => Math.abs(v)));
+  legendEl.textContent = maxAbsHeat ? `本月單日淨額最高 ${fmt(maxAbsHeat)}（綠：收入淨額｜橘：支出淨額）` : "";
 
   const cells = [];
   for (let i = 0; i < firstWeekday; i++) cells.push('<div class="calendar-day empty"></div>');
   for (let d = 1; d <= daysInMonth; d++) {
     const heat = dayHeat[d] || 0;
-    const ratio = maxHeat ? heat / maxHeat : 0;
     const classes = ["calendar-day"];
     if (dayHasTxn.has(d)) classes.push("has-txn");
     if (d === detailSelectedDay) classes.push("selected");
     cells.push(
-      `<div class="${classes.join(" ")}" data-day="${d}" style="background:${heatColor(ratio)};">${d}</div>`
+      `<div class="${classes.join(" ")}" data-day="${d}" style="background:${heatColor(heat, maxAbsHeat)};">${d}</div>`
     );
   }
   gridEl.innerHTML = cells.join("");
@@ -1292,6 +1351,114 @@ function renderStockInvested(stockTxns) {
   el.textContent = fmt(monthTotal);
   note.textContent = `${year}年累計投入 ${fmt(yearTotal)}`;
 }
+
+// ---------- 股票投入金額：年度／逐月／逐筆，區分定期定額與單筆 ----------
+let investYear = null;
+
+function renderInvestCalendar() {
+  const yearLabel = document.getElementById("investYearLabel");
+  const listEl = document.getElementById("investMonthlyList");
+  if (!yearLabel) return;
+
+  const buys = allStockTxns.filter((t) => t.side === "buy");
+  const years = [...new Set(buys.map((t) => parseInt(t.trade_date.slice(0, 4), 10)))].sort((a, b) => a - b);
+
+  if (!years.length) {
+    yearLabel.textContent = "—";
+    listEl.innerHTML = "";
+    charts.investMonthly && charts.investMonthly.destroy();
+    return;
+  }
+  if (investYear === null || !years.includes(investYear)) investYear = years[years.length - 1];
+  yearLabel.textContent = investYear + "年";
+  document.getElementById("investPrevYear").disabled = investYear <= years[0];
+  document.getElementById("investNextYear").disabled = investYear >= years[years.length - 1];
+
+  const recurringByMonth = new Array(12).fill(0);
+  const lumpByMonth = new Array(12).fill(0);
+  const byMonth = {};
+  buys.forEach((t) => {
+    if (parseInt(t.trade_date.slice(0, 4), 10) !== investYear) return;
+    const m = parseInt(t.trade_date.slice(5, 7), 10);
+    const amt = Number(t.amount_twd || 0);
+    if (t.buy_type === "recurring") recurringByMonth[m - 1] += amt;
+    else lumpByMonth[m - 1] += amt;
+    if (!byMonth[m]) byMonth[m] = [];
+    byMonth[m].push(t);
+  });
+
+  const chartOpts = baseChartOptions();
+  renderChart("investMonthly", "chartInvestMonthly", {
+    type: "bar",
+    data: {
+      labels: recurringByMonth.map((_, i) => i + 1 + "月"),
+      datasets: [
+        { label: "定期定額", data: recurringByMonth, backgroundColor: COLOR_SAGE, borderRadius: 4 },
+        { label: "單筆", data: lumpByMonth, backgroundColor: COLOR_CLAY, borderRadius: 4 },
+      ],
+    },
+    options: {
+      ...chartOpts,
+      scales: {
+        x: { ...chartOpts.scales.x, stacked: true },
+        y: { ...chartOpts.scales.y, stacked: true },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.raw)}` } },
+      },
+    },
+  });
+
+  const months = Object.keys(byMonth)
+    .map(Number)
+    .sort((a, b) => b - a);
+  if (!months.length) {
+    listEl.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">這年沒有買進紀錄</span></div>';
+    return;
+  }
+
+  listEl.innerHTML = months
+    .map((m) => {
+      const txns = [...byMonth[m]].sort((a, b) => b.trade_date.localeCompare(a.trade_date));
+      const total = txns.reduce((s, t) => s + Number(t.amount_twd || 0), 0);
+      const itemsHtml = txns
+        .map((t) => {
+          const typeLabel = t.buy_type === "recurring" ? "定期定額" : t.buy_type === "lump" ? "單筆" : "未分類";
+          const typeColor = t.buy_type === "recurring" ? "var(--sage)" : t.buy_type === "lump" ? "var(--clay)" : "var(--muted)";
+          return `<div class="flow-item-top">
+            <span class="flow-item-name">${t.trade_date.slice(5)}｜${t.ticker} ${t.stock_name || ""}｜<span style="color:${typeColor};">${typeLabel}</span></span>
+            <span class="flow-item-value">${fmt(Number(t.amount_twd || 0))}</span>
+          </div>`;
+        })
+        .join("");
+      return `<div class="flow-group">
+        <button class="flow-group-header">
+          <span class="flow-group-name"><span class="flow-caret">▸</span>${m}月</span>
+          <span class="flow-group-value">${fmt(total)}</span>
+        </button>
+        <div class="flow-group-body">${itemsHtml}</div>
+      </div>`;
+    })
+    .join("");
+
+  listEl.querySelectorAll(".flow-group-header").forEach((header) => {
+    const body = header.nextElementSibling;
+    header.addEventListener("click", () => {
+      header.classList.toggle("expanded");
+      body.classList.toggle("expanded");
+    });
+  });
+}
+
+document.getElementById("investPrevYear").addEventListener("click", () => {
+  investYear -= 1;
+  renderInvestCalendar();
+});
+document.getElementById("investNextYear").addEventListener("click", () => {
+  investYear += 1;
+  renderInvestCalendar();
+});
 
 // ---------- 股票均價/損益（加權平均成本法，現金股利不影響成本，另外算總報酬） ----------
 let stockPositions = {};
@@ -1864,14 +2031,26 @@ if (stockCsvFileInput) {
     const okCount = results.filter((r) => !r._skipReason).length;
     statusEl.textContent = `${format === "TW" ? "台股" : "美股"}對帳單，共 ${results.length} 筆，可匯入 ${okCount} 筆`;
 
+    // 買進的預設定期定額/單筆猜測：台股 < 5000 元算定期定額，其餘算單筆，僅供參考，可在下拉選單自己改
+    const guessBuyType = (r) => (r.amount_twd != null && r.amount_twd < 5000 ? "recurring" : "lump");
+
     previewEl.innerHTML = results
-      .map((r) => {
+      .map((r, idx) => {
         const label = r._skipReason ? `⚠️ ${r._skipReason}` : `${r.ticker} ${r.stock_name}`;
-        return `<div class="flow-tx-row"${r._skipReason ? ' style="opacity:0.55;"' : ""}>
+        const rowHtml = `<div class="flow-tx-row"${r._skipReason ? ' style="opacity:0.55;"' : ""}>
           <span class="flow-tx-date">${r.trade_date ? r.trade_date.slice(5) : "?"}</span>
           <span class="flow-tx-note">${label}｜${r._rawSide || ""}｜${r.shares}股</span>
           <span class="flow-tx-amount">${r.amount_twd != null ? fmt(r.amount_twd) : "-"}</span>
         </div>`;
+        if (r._skipReason || r.side !== "buy") return rowHtml;
+        const guess = guessBuyType(r);
+        return (
+          rowHtml +
+          `<select class="stockcsv-buytype" data-idx="${idx}" style="margin:0 0 8px 0;width:100%;border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-size:11px;font-family:inherit;background:var(--bg);color:var(--ink);">
+            <option value="recurring"${guess === "recurring" ? " selected" : ""}>定期定額</option>
+            <option value="lump"${guess === "lump" ? " selected" : ""}>單筆</option>
+          </select>`
+        );
       })
       .join("");
 
@@ -1885,12 +2064,17 @@ if (stockCsvConfirmBtn) {
   stockCsvConfirmBtn.addEventListener("click", async () => {
     const statusEl = document.getElementById("stockCsvStatus");
     const toInsert = stockCsvParsedRows
-      .filter((r) => !r._skipReason)
-      .map((r) => ({
-        ticker: r.ticker, stock_name: r.stock_name, market: r.market, trade_date: r.trade_date,
-        side: r.side, shares: r.shares, price: r.price, currency: r.currency,
-        amount_original: r.amount_original, amount_twd: r.amount_twd, fee: r.fee, tax: r.tax, note: r.note,
-      }));
+      .map((r, idx) => ({ r, idx }))
+      .filter(({ r }) => !r._skipReason)
+      .map(({ r, idx }) => {
+        const buyTypeSelect = document.querySelector(`.stockcsv-buytype[data-idx="${idx}"]`);
+        return {
+          ticker: r.ticker, stock_name: r.stock_name, market: r.market, trade_date: r.trade_date,
+          side: r.side, shares: r.shares, price: r.price, currency: r.currency,
+          amount_original: r.amount_original, amount_twd: r.amount_twd, fee: r.fee, tax: r.tax, note: r.note,
+          buy_type: r.side === "buy" ? (buyTypeSelect ? buyTypeSelect.value : "lump") : null,
+        };
+      });
     stockCsvConfirmBtn.disabled = true;
     stockCsvConfirmBtn.textContent = "匯入中...";
     const { error } = await sb.from("stock_transactions").insert(toInsert);
@@ -1912,6 +2096,19 @@ if (stockCsvConfirmBtn) {
 // 輸入：信用卡/銀行明細比對
 // ===========================================================
 const RECONCILE_DATE_TOLERANCE_DAYS = 3;
+
+// SheetJS 有時候會把長得像日期的儲存格自動轉成 Date 物件或 Excel 序列數字，
+// 這裡統一轉回原本的文字格式，避免後續的字串解析（split('/')）壞掉
+function cellToText(val) {
+  if (val instanceof Date) {
+    return `${String(val.getMonth() + 1).padStart(2, "0")}/${String(val.getDate()).padStart(2, "0")}`;
+  }
+  if (typeof val === "number") {
+    const d = XLSX.SSF.parse_date_code(val);
+    if (d) return `${String(d.m).padStart(2, "0")}/${String(d.d).padStart(2, "0")}`;
+  }
+  return val;
+}
 
 function rocDateToIsoLocal(rocDate) {
   // "115/08/12" -> "2026-08-12"
@@ -1957,7 +2154,7 @@ function parseUnionBankStatement(rows) {
     const posted = r[postedCol];
     const spend = r[spendCol];
     if (!posted || !spend) continue; // 非交易列（摘要/卡片標題），跳過
-    const [mm, dd] = String(spend).trim().split("/");
+    const [mm, dd] = String(cellToText(spend)).trim().split("/");
     if (!mm || !dd) continue;
     let year = statementYear;
     if (parseInt(mm, 10) > statementMonth) year -= 1; // 跨年時，帳單月之後的月份代表是去年
@@ -1987,8 +2184,9 @@ if (reconcileFileInput) {
     statusEl.textContent = "解析中...";
     resultEl.innerHTML = "";
 
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array" });
+    // CSV 用文字讀取才會正確處理 UTF-8 中文，讀成 arrayBuffer 常會被 SheetJS 誤判編碼變亂碼
+    const isCsv = file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
+    const wb = isCsv ? XLSX.read(await file.text(), { type: "string" }) : XLSX.read(await file.arrayBuffer(), { type: "array" });
     const sheet = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
 
@@ -2016,9 +2214,42 @@ if (reconcileFileInput) {
       <span class="flow-tx-amount">${fmt(Math.abs(row.amount))}</span>
     </div>`;
 
+    const catOptionsFor = (type) =>
+      allCategories
+        .filter((c) => c.type === type)
+        .map((c) => `<option value="${c.id}">${c.mid_name}｜${c.item_name}</option>`)
+        .join("");
+
+    const renderMissingRow = (row, idx) => {
+      const defaultType = row.amount >= 0 ? "expense" : "income";
+      const noteVal = row.note.replace(/"/g, "&quot;");
+      return `<div class="reconcile-row" data-idx="${idx}">
+        <label class="flow-tx-row">
+          <input type="checkbox" class="reconcile-check" checked />
+          <span class="flow-tx-date">${row.date.slice(5)}</span>
+          <span class="flow-tx-note">${row.note}</span>
+          <span class="flow-tx-amount">${fmt(Math.abs(row.amount))}</span>
+        </label>
+        <div class="reconcile-fields">
+          <input type="date" class="reconcile-date" value="${row.date}" />
+          <input type="number" class="reconcile-amount" value="${Math.abs(row.amount)}" step="1" />
+          <select class="reconcile-type">
+            <option value="expense"${defaultType === "expense" ? " selected" : ""}>支出</option>
+            <option value="income"${defaultType === "income" ? " selected" : ""}>收入</option>
+          </select>
+          <select class="reconcile-category">${catOptionsFor(defaultType)}</select>
+          <input type="text" class="reconcile-note" value="${noteVal}" placeholder="備註" />
+        </div>
+      </div>`;
+    };
+
     let html = "";
     if (missing.length) {
-      html += `<div class="card-title" style="margin-top:14px;">⚠️ 明細有、可能沒記到（${missing.length}）</div>` + missing.map(renderRow).join("");
+      html +=
+        `<div class="card-title" style="margin-top:14px;">⚠️ 明細有、可能沒記到（${missing.length}）</div>` +
+        missing.map(renderMissingRow).join("") +
+        `<button type="button" id="reconcileConfirm" class="reconcile-confirm-btn">寫入勾選的項目</button>` +
+        `<div id="reconcileConfirmStatus" class="entry-message" style="margin-top:8px;"></div>`;
     }
     if (ambiguous.length) {
       html += `<div class="card-title" style="margin-top:14px;">❓ 不確定，麻煩自己確認（${ambiguous.length}）</div>` + ambiguous.map(renderRow).join("");
@@ -2027,6 +2258,55 @@ if (reconcileFileInput) {
       html += '<div class="flow-item-top" style="margin-top:14px;"><span class="flow-item-name">全部都比對到了</span></div>';
     }
     resultEl.innerHTML = html;
+
+    resultEl.querySelectorAll(".reconcile-row").forEach((rowEl) => {
+      const typeSelect = rowEl.querySelector(".reconcile-type");
+      const catSelect = rowEl.querySelector(".reconcile-category");
+      typeSelect.addEventListener("change", () => {
+        catSelect.innerHTML = catOptionsFor(typeSelect.value);
+      });
+    });
+
+    const confirmBtn = document.getElementById("reconcileConfirm");
+    if (confirmBtn) {
+      confirmBtn.addEventListener("click", async () => {
+        const confirmStatusEl = document.getElementById("reconcileConfirmStatus");
+        const rowsToInsert = [];
+        const rowEls = [];
+        resultEl.querySelectorAll(".reconcile-row").forEach((rowEl) => {
+          const checked = rowEl.querySelector(".reconcile-check").checked;
+          if (!checked) return;
+          const categoryId = Number(rowEl.querySelector(".reconcile-category").value);
+          rowsToInsert.push({
+            date: rowEl.querySelector(".reconcile-date").value,
+            amount: Number(rowEl.querySelector(".reconcile-amount").value),
+            type: rowEl.querySelector(".reconcile-type").value,
+            category_id: categoryId,
+            note: rowEl.querySelector(".reconcile-note").value.trim() || null,
+            is_pending: false,
+          });
+          rowEls.push(rowEl);
+        });
+        if (!rowsToInsert.length) {
+          confirmStatusEl.textContent = "沒有勾選任何項目";
+          return;
+        }
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "寫入中...";
+        const { error } = await sb.from("transactions").insert(rowsToInsert);
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "寫入勾選的項目";
+        if (error) {
+          confirmStatusEl.textContent = "寫入失敗：" + error.message;
+          confirmStatusEl.className = "entry-message error";
+          return;
+        }
+        confirmStatusEl.textContent = `已寫入 ${rowsToInsert.length} 筆`;
+        confirmStatusEl.className = "entry-message success";
+        allTxns = allTxns.concat(rowsToInsert);
+        rowEls.forEach((rowEl) => rowEl.remove());
+      });
+    }
   });
 }
 
