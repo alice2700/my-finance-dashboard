@@ -30,9 +30,13 @@ html, body {
   background: var(--bg);
   padding: max(20px, env(safe-area-inset-top)) 20px 14px;
   display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+.topbar-row {
+  display: flex;
   justify-content: space-between;
   align-items: baseline;
-  border-bottom: 1px solid var(--border);
 }
 .topbar-title {
   font-size: 19px;

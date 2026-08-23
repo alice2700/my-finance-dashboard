@@ -19,9 +19,16 @@
 <body>
 
   <header class="topbar">
-    <div class="topbar-title">理財誌</div>
-    <div class="topbar-updated" id="updatedAt">尚未載入資料</div>
-    <button id="logoutBtn" class="logout-btn hidden">登出</button>
+    <div class="topbar-row">
+      <div class="topbar-title">理財誌</div>
+      <div class="topbar-updated" id="updatedAt">尚未載入資料</div>
+      <button id="logoutBtn" class="logout-btn hidden">登出</button>
+    </div>
+    <div class="segmented hidden" id="ownerFilterToggle" style="margin-top:10px;">
+      <button type="button" class="segmented-btn active" data-owner="all">家庭</button>
+      <button type="button" class="segmented-btn" data-owner="YT">YT</button>
+      <button type="button" class="segmented-btn" data-owner="MG">MG</button>
+    </div>
   </header>
 
   <section id="page-login">

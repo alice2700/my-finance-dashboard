@@ -27,6 +27,29 @@ function fmt(n) {
   return "NT$ " + new Intl.NumberFormat("zh-TW").format(Math.round(n));
 }
 
+// ---------- 個人／家庭 owner 篩選（YT/MG 共用這個 app） ----------
+const OWNER_BY_EMAIL = {
+  "alice2700@gmail.com": "YT",
+  "cyc41022@gmail.com": "MG",
+};
+let myOwner = "YT"; // 目前登入者，決定新增資料時預設標記給誰
+let ownerFilter = localStorage.getItem("ownerFilter") || "all"; // all | YT | MG，決定畫面上看到的資料範圍
+
+function filterByOwner(rows) {
+  return ownerFilter === "all" ? (rows || []) : (rows || []).filter((r) => r.owner === ownerFilter);
+}
+
+document.getElementById("ownerFilterToggle").addEventListener("click", (e) => {
+  const btn = e.target.closest(".segmented-btn");
+  if (!btn || btn.dataset.owner === ownerFilter) return;
+  ownerFilter = btn.dataset.owner;
+  localStorage.setItem("ownerFilter", ownerFilter);
+  document.querySelectorAll("#ownerFilterToggle .segmented-btn").forEach((b) => b.classList.toggle("active", b === btn));
+  detailEditingId = null;
+  detailAddingNew = false;
+  processAndRender();
+});
+
 // ---------- 分頁切換 ----------
 document.querySelectorAll(".tab").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -45,6 +68,7 @@ function showApp() {
   document.getElementById("app").classList.remove("hidden");
   document.querySelector(".tabbar").classList.remove("hidden");
   document.getElementById("logoutBtn").classList.remove("hidden");
+  document.getElementById("ownerFilterToggle").classList.remove("hidden");
 }
 
 function showLogin() {
@@ -52,6 +76,7 @@ function showLogin() {
   document.getElementById("app").classList.add("hidden");
   document.querySelector(".tabbar").classList.add("hidden");
   document.getElementById("logoutBtn").classList.add("hidden");
+  document.getElementById("ownerFilterToggle").classList.add("hidden");
 }
 
 document.getElementById("loginForm").addEventListener("submit", async (e) => {
@@ -76,6 +101,7 @@ document.getElementById("logoutBtn").addEventListener("click", () => sb.auth.sig
 
 sb.auth.onAuthStateChange((event, session) => {
   if (event === "SIGNED_IN" && session) {
+    myOwner = OWNER_BY_EMAIL[session.user.email] || "YT";
     showApp();
     loadData();
   } else if (event === "SIGNED_OUT") {
@@ -86,6 +112,7 @@ sb.auth.onAuthStateChange((event, session) => {
 async function initAuth() {
   const { data: { session } } = await sb.auth.getSession();
   if (session) {
+    myOwner = OWNER_BY_EMAIL[session.user.email] || "YT";
     showApp();
     loadData();
   } else {
@@ -103,6 +130,17 @@ function renderChart(key, canvasId, config) {
   charts[key] = new Chart(document.getElementById(canvasId), config);
 }
 
+let rawCategories = [];
+let rawSnapshots = [];
+let rawBalances = [];
+let rawTxns = [];
+let rawGoalsRow = null;
+let rawStockTxns = [];
+let rawBudgetGroupsRaw = [];
+let rawBudgetCatsRaw = [];
+let rawBudgetAmountsRaw = [];
+let rawStockPricesRaw = [];
+
 async function loadData() {
   try {
     const [
@@ -119,10 +157,10 @@ async function loadData() {
     ] = await Promise.all([
       sb.from("category_map").select("id,item_name,mid_name,type"),
       sb.from("asset_snapshots").select("year,month,cash_and_deposits,other_investments,stock_market_value").order("year").order("month"),
-      sb.from("account_balances").select("account_name,account_type,balance,recorded_at").order("recorded_at"),
-      sb.from("transactions").select("id,date,amount,type,category_id,note,is_special,is_pending,pending_group").limit(5000),
+      sb.from("account_balances").select("account_name,account_type,balance,recorded_at,owner").order("recorded_at"),
+      sb.from("transactions").select("id,date,amount,type,category_id,note,is_special,is_pending,pending_group,owner").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
-      sb.from("stock_transactions").select("id,ticker,market,stock_name,trade_date,side,shares,amount_twd,buy_type").limit(5000),
+      sb.from("stock_transactions").select("id,ticker,market,stock_name,trade_date,side,shares,amount_twd,buy_type,owner").limit(5000),
       sb.from("budget_groups").select("id,name,mode"),
       sb.from("budget_group_categories").select("budget_group_id,category_id"),
       sb.from("budget_amounts").select("budget_group_id,year,month,amount"),
@@ -139,6 +177,37 @@ async function loadData() {
     if (bgcErr) throw bgcErr;
     if (baErr) throw baErr;
 
+    rawCategories = categories || [];
+    rawSnapshots = snapshots || [];
+    rawBalances = balances || [];
+    rawTxns = txns || [];
+    rawGoalsRow = (goalsRows && goalsRows[0]) || null;
+    rawStockTxns = stockTxns || [];
+    rawBudgetGroupsRaw = budgetGroupsRaw || [];
+    rawBudgetCatsRaw = budgetCatsRaw || [];
+    rawBudgetAmountsRaw = budgetAmountsRaw || [];
+    rawStockPricesRaw = stockPricesRaw || [];
+
+    processAndRender();
+  } catch (err) {
+    console.error(err);
+    showLoadError(err);
+  }
+}
+
+function processAndRender() {
+  const categories = rawCategories;
+  const snapshots = ownerFilter === "MG" ? [] : rawSnapshots; // 舊 asset_snapshots 沒有 owner 欄位，本來就是 YT 一人時期的資料
+  const balances = filterByOwner(rawBalances);
+  const txns = filterByOwner(rawTxns);
+  const goalsRow = rawGoalsRow;
+  const stockTxns = filterByOwner(rawStockTxns);
+  const budgetGroupsRaw = rawBudgetGroupsRaw;
+  const budgetCatsRaw = rawBudgetCatsRaw;
+  const budgetAmountsRaw = rawBudgetAmountsRaw;
+  const stockPricesRaw = rawStockPricesRaw;
+
+  try {
     const groupById = {};
     (budgetGroupsRaw || []).forEach((g) => {
       groupById[g.id] = { id: g.id, name: g.name, mode: g.mode, categoryIds: [], amounts: {} };
@@ -282,8 +351,8 @@ async function loadData() {
     renderDividendCalendar();
 
     if (trend.length) {
-      renderGoals(buildGoals(goalsRows && goalsRows[0], trend));
-      renderYearlyReview(trend, allTxns, goalsRows && goalsRows[0], stockTxns);
+      renderGoals(buildGoals(goalsRow, trend));
+      renderYearlyReview(trend, allTxns, goalsRow, stockTxns);
     }
 
     renderStockInvested(stockTxns);
@@ -297,7 +366,11 @@ async function loadData() {
     showLoadError(err);
   }
 
-  loadStocks();
+  if (lastLiveStocks) {
+    renderStocks(lastLiveStocks);
+  } else {
+    loadStocksLive();
+  }
 }
 
 function showLoadError(err) {
@@ -1060,9 +1133,10 @@ function renderDetailDayList(day) {
           const info = allCatMap[t.category_id] || { item_name: "未分類" };
           const sign = t.type === "income" ? "+" : "-";
           const pendingTag = t.is_pending ? "（待銷帳）" : "";
+          const ownerTag = ownerFilter === "all" ? `｜${t.owner}` : "";
           const selectedClass = String(t.id) === String(detailEditingId) ? " selected" : "";
           return `<button type="button" class="detail-tx-row${selectedClass}" data-id="${t.id}">
-            <span class="flow-tx-note">${info.item_name}${pendingTag}｜${t.note || ""}</span>
+            <span class="flow-tx-note">${info.item_name}${pendingTag}｜${t.note || ""}${ownerTag}</span>
             <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
           </button>`;
         })
@@ -1108,6 +1182,12 @@ function renderDetailTxForm(t, dateStr) {
     </label>
     <label>分類<select class="edit-category">${catOptions}</select></label>
     <label>備註<input type="text" class="edit-note" value="${noteVal}" /></label>
+    <label>登記人
+      <select class="edit-owner">
+        <option value="YT"${(t ? t.owner : myOwner) === "YT" ? " selected" : ""}>YT</option>
+        <option value="MG"${(t ? t.owner : myOwner) === "MG" ? " selected" : ""}>MG</option>
+      </select>
+    </label>
     <label class="checkbox-label"><input type="checkbox" class="edit-pending"${t && t.is_pending ? " checked" : ""} />待銷帳</label>
     <div style="display:flex;gap:8px;">
       <button type="button" class="edit-save" style="flex:1;">${isNew ? "新增" : "儲存"}</button>
@@ -1147,6 +1227,7 @@ function wireDetailTxForm(day) {
       type: typeSelect.value,
       category_id: Number(catSelect.value),
       note: form.querySelector(".edit-note").value.trim() || null,
+      owner: form.querySelector(".edit-owner").value,
       is_pending: form.querySelector(".edit-pending").checked,
     };
     saveBtn.disabled = true;
@@ -1162,9 +1243,9 @@ function wireDetailTxForm(day) {
         statusEl.className = "edit-status entry-message error";
         return;
       }
-      allTxns.push(data);
+      rawTxns.push(data);
       detailAddingNew = false;
-      renderDetailView();
+      processAndRender();
       return;
     }
 
@@ -1176,10 +1257,10 @@ function wireDetailTxForm(day) {
       statusEl.className = "edit-status entry-message error";
       return;
     }
-    const t = allTxns.find((x) => String(x.id) === String(id));
+    const t = rawTxns.find((x) => String(x.id) === String(id));
     if (t) Object.assign(t, fields);
     detailEditingId = null;
-    renderDetailView();
+    processAndRender();
   });
 
   const deleteBtn = form.querySelector(".edit-delete");
@@ -1199,9 +1280,9 @@ function wireDetailTxForm(day) {
         statusEl.className = "edit-status entry-message error";
         return;
       }
-      allTxns = allTxns.filter((x) => String(x.id) !== String(id));
+      rawTxns = rawTxns.filter((x) => String(x.id) !== String(id));
       detailEditingId = null;
-      renderDetailView();
+      processAndRender();
     });
   }
 }
@@ -1555,11 +1636,14 @@ function buildStockPositions(stockTxns, txns, catMap) {
 }
 
 // ---------- 股票（現價維持原本的 Apps Script） ----------
-async function loadStocks() {
+let lastLiveStocks = null;
+
+async function loadStocksLive() {
   try {
     const res = await fetch(STOCKS_API_URL);
     const data = await res.json();
-    renderStocks(data.stocks);
+    lastLiveStocks = data.stocks || [];
+    renderStocks(lastLiveStocks);
   } catch (err) {
     console.error("股票資料載入失敗", err);
   }
@@ -1911,6 +1995,7 @@ if (balanceForm) {
       balance: Number(amount),
       recorded_at: date,
       note: note || null,
+      owner: myOwner,
     });
 
     btn.disabled = false;
@@ -2135,6 +2220,7 @@ if (stockCsvConfirmBtn) {
           side: r.side, shares: r.shares, price: r.price, currency: r.currency,
           amount_original: r.amount_original, amount_twd: r.amount_twd, fee: r.fee, tax: r.tax, note: r.note,
           buy_type: r.side === "buy" ? (buyTypeSelect ? buyTypeSelect.value : "lump") : null,
+          owner: myOwner,
         };
       });
     stockCsvConfirmBtn.disabled = true;
@@ -2148,7 +2234,8 @@ if (stockCsvConfirmBtn) {
     }
     statusEl.textContent = `已匯入 ${toInsert.length} 筆`;
     stockCsvConfirmBtn.classList.add("hidden");
-    allStockTxns = allStockTxns.concat(data || []);
+    rawStockTxns = rawStockTxns.concat(data || []);
+    processAndRender();
     document.getElementById("stockCsvPreview").innerHTML = "";
     document.getElementById("stockCsvFile").value = "";
   });
@@ -2408,6 +2495,7 @@ if (reconcileFileInput) {
             category_id: categoryId,
             note: rowEl.querySelector(".reconcile-note").value.trim() || null,
             is_pending: false,
+            owner: myOwner,
           });
           rowEls.push(rowEl);
         });
@@ -2427,7 +2515,8 @@ if (reconcileFileInput) {
         }
         confirmStatusEl.textContent = `已寫入 ${rowsToInsert.length} 筆`;
         confirmStatusEl.className = "entry-message success";
-        allTxns = allTxns.concat(data || []);
+        rawTxns = rawTxns.concat(data || []);
+        processAndRender();
         rowEls.forEach((rowEl) => rowEl.remove());
       });
     }
