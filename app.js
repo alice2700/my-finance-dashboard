@@ -1933,7 +1933,9 @@ function parseCsvRows(text) {
 
 function parseNum(s) {
   if (s == null) return 0;
-  return parseFloat(String(s).replace(/,/g, "")) || 0;
+  // 有些對帳單用全形/特殊的負號字元（− U+2212、－ U+FF0D 等），先正規化成一般的 -
+  const normalized = String(s).replace(/[‐-―−－]/g, "-").replace(/,/g, "");
+  return parseFloat(normalized) || 0;
 }
 
 function slashDateToIso(s) {
@@ -2077,7 +2079,7 @@ if (stockCsvConfirmBtn) {
       });
     stockCsvConfirmBtn.disabled = true;
     stockCsvConfirmBtn.textContent = "匯入中...";
-    const { error } = await sb.from("stock_transactions").insert(toInsert);
+    const { data, error } = await sb.from("stock_transactions").insert(toInsert).select();
     stockCsvConfirmBtn.disabled = false;
     stockCsvConfirmBtn.textContent = "確認匯入";
     if (error) {
@@ -2086,7 +2088,7 @@ if (stockCsvConfirmBtn) {
     }
     statusEl.textContent = `已匯入 ${toInsert.length} 筆`;
     stockCsvConfirmBtn.classList.add("hidden");
-    allStockTxns = allStockTxns.concat(toInsert);
+    allStockTxns = allStockTxns.concat(data || []);
     document.getElementById("stockCsvPreview").innerHTML = "";
     document.getElementById("stockCsvFile").value = "";
   });
@@ -2166,6 +2168,62 @@ function parseUnionBankStatement(rows) {
   return { format: "聯邦銀行", results };
 }
 
+function cellToFullDateParts(val) {
+  if (val instanceof Date) return { year: val.getFullYear(), month: val.getMonth() + 1 };
+  if (typeof val === "number") {
+    const d = XLSX.SSF.parse_date_code(val);
+    if (d) return { year: d.y, month: d.m };
+    return null;
+  }
+  const s = String(val == null ? "" : val).trim();
+  const m = s.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if (m) return { year: parseInt(m[1], 10), month: parseInt(m[2], 10) };
+  return null;
+}
+
+// 國泰CUBE卡對帳單：「帳單明細」段落下逐筆消費，中間穿插「上期帳單總額」（消費日是"−"）
+// 跟「ＣＵＢＥＡｐｐ轉帳繳款」這種還款列（不是消費，備註含「繳款」直接排除）
+function parseCathayCubeStatement(rows) {
+  let statementYear = null;
+  let statementMonth = null;
+  for (let i = 0; i < rows.length - 1; i++) {
+    const col = rows[i].findIndex((c) => String(c).trim() === "帳單結帳日");
+    if (col !== -1) {
+      const parts = cellToFullDateParts(rows[i + 1][col]);
+      if (parts) { statementYear = parts.year; statementMonth = parts.month; }
+      break;
+    }
+  }
+  if (!statementYear) return { format: null, results: [] };
+
+  const headerIdx = rows.findIndex((r) => r.includes("消費日") && r.includes("交易說明") && r.includes("新臺幣金額"));
+  if (headerIdx === -1) return { format: null, results: [] };
+  const header = rows[headerIdx];
+  const dateCol = header.indexOf("消費日");
+  const noteCol = header.indexOf("交易說明");
+  const amtCol = header.indexOf("新臺幣金額");
+
+  const results = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r || !r.length) continue;
+    const dateText = cellToText(r[dateCol]);
+    const dm = String(dateText == null ? "" : dateText).trim().match(/^(\d{1,2})\/(\d{1,2})$/);
+    if (!dm) continue; // 排除「−」、單欄摘要列（例如「正卡消費 TWD ...」）
+    const note = (r[noteCol] || "").toString().trim();
+    if (!note || note.includes("繳款")) continue; // 排除 App 轉帳繳款這種還款列，不是消費
+    const mm = dm[1].padStart(2, "0");
+    const dd = dm[2].padStart(2, "0");
+    let year = statementYear;
+    if (parseInt(mm, 10) > statementMonth) year -= 1;
+    const date = `${year}-${mm}-${dd}`;
+    const amount = parseNum(r[amtCol]);
+    if (!amount) continue;
+    results.push({ date, amount, note });
+  }
+  return { format: "國泰CUBE卡", results };
+}
+
 function matchReconcileRow(row) {
   const candidates = allTxns.filter((t) => {
     if (Math.abs(Math.abs(Number(t.amount)) - Math.abs(row.amount)) > 0.5) return false;
@@ -2190,9 +2248,15 @@ if (reconcileFileInput) {
     const sheet = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
 
-    const { format, results } = parseUnionBankStatement(rows);
+    const STATEMENT_PARSERS = [parseUnionBankStatement, parseCathayCubeStatement];
+    let format = null;
+    let results = [];
+    for (const parser of STATEMENT_PARSERS) {
+      const parsed = parser(rows);
+      if (parsed.format) { format = parsed.format; results = parsed.results; break; }
+    }
     if (!format) {
-      statusEl.textContent = "無法辨識這份對帳單的格式（目前只支援聯邦銀行），麻煩提供這張卡的範例讓我加解析規則";
+      statusEl.textContent = "無法辨識這份對帳單的格式（目前支援聯邦銀行、國泰CUBE卡），麻煩提供這張卡的範例讓我加解析規則";
       return;
     }
 
@@ -2293,7 +2357,7 @@ if (reconcileFileInput) {
         }
         confirmBtn.disabled = true;
         confirmBtn.textContent = "寫入中...";
-        const { error } = await sb.from("transactions").insert(rowsToInsert);
+        const { data, error } = await sb.from("transactions").insert(rowsToInsert).select();
         confirmBtn.disabled = false;
         confirmBtn.textContent = "寫入勾選的項目";
         if (error) {
@@ -2303,7 +2367,7 @@ if (reconcileFileInput) {
         }
         confirmStatusEl.textContent = `已寫入 ${rowsToInsert.length} 筆`;
         confirmStatusEl.className = "entry-message success";
-        allTxns = allTxns.concat(rowsToInsert);
+        allTxns = allTxns.concat(data || []);
         rowEls.forEach((rowEl) => rowEl.remove());
       });
     }
