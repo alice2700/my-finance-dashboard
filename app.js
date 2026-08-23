@@ -17,6 +17,11 @@ const COLOR_MUTED = "#8C8577";
 const COLOR_BORDER = "#E8E2D8";
 const PIE_COLORS = ["#7C9473", "#C08552", "#B8A088", "#94A897", "#D9B382", "#8C8577", "#A9BFA0", "#CBA37C"];
 
+if (window.ChartDataLabels) {
+  Chart.register(ChartDataLabels);
+  Chart.defaults.plugins.datalabels = { display: false };
+}
+
 function fmt(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
   return "NT$ " + new Intl.NumberFormat("zh-TW").format(Math.round(n));
@@ -278,7 +283,7 @@ async function loadData() {
 
     if (trend.length) {
       renderGoals(buildGoals(goalsRows && goalsRows[0], trend));
-      renderYearlyReview(trend, allTxns, goalsRows && goalsRows[0]);
+      renderYearlyReview(trend, allTxns, goalsRows && goalsRows[0], stockTxns);
     }
 
     renderStockInvested(stockTxns);
@@ -1041,7 +1046,13 @@ function renderDetailDayList(day) {
     .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
 
   const addBtnHtml = `<button type="button" id="detailAddNewBtn" class="detail-add-btn">＋ 新增一筆</button>`;
-  const addFormHtml = detailAddingNew ? renderDetailTxForm(null, dateStr) : "";
+
+  const editingTx = detailEditingId ? dayTxns.find((t) => String(t.id) === String(detailEditingId)) : null;
+  const formHtml = detailAddingNew
+    ? renderDetailTxForm(null, dateStr)
+    : editingTx
+      ? renderDetailTxForm(editingTx, dateStr)
+      : "";
 
   const rowsHtml = dayTxns.length
     ? dayTxns
@@ -1049,16 +1060,16 @@ function renderDetailDayList(day) {
           const info = allCatMap[t.category_id] || { item_name: "未分類" };
           const sign = t.type === "income" ? "+" : "-";
           const pendingTag = t.is_pending ? "（待銷帳）" : "";
-          const rowHtml = `<button type="button" class="detail-tx-row" data-id="${t.id}">
+          const selectedClass = String(t.id) === String(detailEditingId) ? " selected" : "";
+          return `<button type="button" class="detail-tx-row${selectedClass}" data-id="${t.id}">
             <span class="flow-tx-note">${info.item_name}${pendingTag}｜${t.note || ""}</span>
             <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
           </button>`;
-          return rowHtml + (String(t.id) === String(detailEditingId) ? renderDetailTxForm(t, dateStr) : "");
         })
         .join("")
     : '<div class="flow-item-top"><span class="flow-item-name">這天沒有符合勾選分類的紀錄</span></div>';
 
-  listEl.innerHTML = addBtnHtml + addFormHtml + rowsHtml;
+  listEl.innerHTML = addBtnHtml + rowsHtml + formHtml;
 
   document.getElementById("detailAddNewBtn").addEventListener("click", () => {
     detailAddingNew = !detailAddingNew;
@@ -1296,7 +1307,7 @@ function renderGoals(goals) {
 }
 
 // ---------- 連續正結餘 / 年度儲蓄達成率 ----------
-function renderYearlyReview(trend, txns, goalsRow) {
+function renderYearlyReview(trend, txns, goalsRow, stockTxns) {
   let streak = 0;
   for (let i = trend.length - 1; i >= 0; i--) {
     if (trend[i].income - trend[i].expense >= 0) streak++;
@@ -1307,7 +1318,9 @@ function renderYearlyReview(trend, txns, goalsRow) {
     ? `最近連續 ${streak} 個月收入大於支出（含本月）`
     : "最近一個月是負結餘，還沒開始累積";
 
-  const year = new Date().getFullYear();
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
   let income = 0;
   let expense = 0;
   txns.forEach((t) => {
@@ -1316,17 +1329,41 @@ function renderYearlyReview(trend, txns, goalsRow) {
     if (t.type === "income") income += Number(t.amount);
     else expense += Number(t.amount);
   });
-  const actualRatio = income ? ((income - expense) / income) * 100 : 0;
-  const targetRatio = goalsRow && goalsRow.savings_invest_pct_target != null
-    ? Number(goalsRow.savings_invest_pct_target) * 100
+  const totalSavings = income - expense;
+
+  let stockInvested = 0;
+  (stockTxns || []).forEach((t) => {
+    if (t.side !== "buy") return;
+    if (parseInt(t.trade_date.slice(0, 4), 10) !== year) return;
+    stockInvested += Number(t.amount_twd || 0);
+  });
+  const cashBalance = totalSavings - stockInvested;
+
+  const target = goalsRow && goalsRow.annual_savings_target != null
+    ? Number(goalsRow.annual_savings_target)
     : null;
-  document.getElementById("savingsRateActual").textContent = actualRatio.toFixed(1) + "%";
+
+  document.getElementById("savingsRateActual").textContent = fmt(totalSavings);
   document.getElementById("savingsRateTarget").textContent =
-    targetRatio != null ? "目標 " + targetRatio.toFixed(0) + "%" : "尚未設定目標";
-  const pct = targetRatio ? Math.max(0, Math.min(100, (actualRatio / targetRatio) * 100)) : 0;
+    target != null ? "目標 " + fmt(target) : "尚未設定目標";
+  const pct = target ? Math.max(0, Math.min(100, (totalSavings / target) * 100)) : 0;
   document.getElementById("savingsRateBar").style.width = pct.toFixed(1) + "%";
+  document.getElementById("savingsRateBreakdown").textContent =
+    `股票投入 ${fmt(stockInvested)}　現金結餘 ${fmt(cashBalance)}`;
+
+  let gapNote = "";
+  if (target != null) {
+    const gap = target - totalSavings;
+    const monthsLeft = 12 - month + 1;
+    if (gap <= 0) {
+      gapNote = `已達成年度目標，超前 ${fmt(-gap)}`;
+    } else {
+      const perMonth = gap / monthsLeft;
+      gapNote = `距離目標還差 ${fmt(gap)}（剩 ${monthsLeft} 個月，平均每月還需 ${fmt(perMonth)}）`;
+    }
+  }
   document.getElementById("savingsRateNote").textContent =
-    `${year}年至今，收入 ${fmt(income)}，支出 ${fmt(expense)}`;
+    `${year}年至今，收入 ${fmt(income)}，支出 ${fmt(expense)}${gapNote ? "。" + gapNote : ""}`;
 }
 
 // ---------- 股票投入金額（stock_transactions，只算買進，不含賣出/除息） ----------
@@ -1575,21 +1612,25 @@ function renderStockTable(container, stocks, total) {
     } else if (s.costBasis) {
       gainHtml = `<div class="stock-gain-row"><span class="gain-muted">成本 ${fmt(s.costBasis)} · 尚無市值資料</span></div>`;
     }
-    const row = document.createElement("div");
+    const row = document.createElement("button");
+    row.type = "button";
     row.className = "stock-row";
     row.innerHTML = `
       <div class="stock-row-top">
         <span class="stock-code">${s.code}</span>
         <span class="stock-name">${s.name}</span>
         <span class="stock-value">${s.marketValue != null ? fmt(s.marketValue) : "尚無市值資料"}</span>
+        <span class="stock-pct">${s.marketValue != null ? pct.toFixed(1) + "%" : ""}</span>
       </div>
-      <div class="stock-row-meta">
-        <span>${s.shares ? Number(s.shares).toLocaleString("zh-TW") + " 股" : ""}${s.avgCost != null ? " · 均價 " + s.avgCost.toFixed(2) : ""}</span>
-        <span>${s.marketValue != null ? pct.toFixed(1) + "%" : ""}</span>
+      <div class="stock-row-detail">
+        <div class="stock-row-meta">
+          <span>${s.shares ? Number(s.shares).toLocaleString("zh-TW") + " 股" : ""}${s.avgCost != null ? " · 均價 " + s.avgCost.toFixed(2) : ""}</span>
+        </div>
+        <div class="flow-bar-track"><div class="flow-bar-fill income" style="width:${pct}%"></div></div>
+        ${gainHtml}
       </div>
-      <div class="flow-bar-track"><div class="flow-bar-fill income" style="width:${pct}%"></div></div>
-      ${gainHtml}
     `;
+    row.addEventListener("click", () => row.classList.toggle("expanded"));
     container.appendChild(row);
   });
 }
@@ -1635,16 +1676,35 @@ function renderStocks(stocks) {
   renderAssetComposition();
 
   if (withValue.length) {
+    const GROUP_THRESHOLD = 0.04;
+    const chartSlices = [];
+    let otherTotal = 0;
+    [...withValue].sort((a, b) => b.marketValue - a.marketValue).forEach((s) => {
+      if (total && s.marketValue / total >= GROUP_THRESHOLD) chartSlices.push({ label: s.code, value: s.marketValue });
+      else otherTotal += s.marketValue;
+    });
+    if (otherTotal > 0) chartSlices.push({ label: "其他", value: otherTotal });
+
     renderChart("stocks", "chartStocks", {
       type: "doughnut",
       data: {
-        labels: withValue.map((s) => s.code),
-        datasets: [{ data: withValue.map((s) => s.marketValue), backgroundColor: PIE_COLORS, borderWidth: 2, borderColor: "#fff" }],
+        labels: chartSlices.map((s) => s.label),
+        datasets: [{ data: chartSlices.map((s) => s.value), backgroundColor: PIE_COLORS, borderWidth: 2, borderColor: "#fff" }],
       },
       options: {
         plugins: {
-          legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 }, color: COLOR_MUTED } },
+          legend: { display: false },
           tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.raw)}` } },
+          datalabels: {
+            display: true,
+            color: "#fff",
+            font: { size: 11, weight: "600" },
+            formatter: (value, ctx) => {
+              const label = ctx.chart.data.labels[ctx.dataIndex];
+              const pct = total ? (value / total) * 100 : 0;
+              return `${label}\n${pct.toFixed(0)}%`;
+            },
+          },
         },
       },
     });

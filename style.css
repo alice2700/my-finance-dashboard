@@ -375,6 +375,7 @@ html, body {
 }
 .detail-tx-row .flow-tx-note { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-tx-row .flow-tx-amount { flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--ink); }
+.detail-tx-row.selected { background: var(--sage-soft); border-radius: 6px; padding-left: 6px; padding-right: 6px; }
 .detail-edit-form { padding: 10px 0 12px; border-bottom: 1px solid var(--border); }
 .detail-add-btn {
   display: block;
@@ -448,7 +449,19 @@ html, body {
 .flow-tx-note { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-tx-amount { flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--ink); }
 
-.stock-table { display: flex; flex-direction: column; gap: 14px; }
+.stock-table { display: flex; flex-direction: column; gap: 0; }
+.stock-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  padding: 8px 0;
+  cursor: pointer;
+  font: inherit;
+}
+.stock-row:last-child { border-bottom: none; }
 .stock-row-top {
   display: flex;
   align-items: baseline;
@@ -458,12 +471,15 @@ html, body {
 .stock-code { font-weight: 600; color: var(--ink); }
 .stock-name { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stock-value { color: var(--ink); font-variant-numeric: tabular-nums; }
+.stock-pct { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.stock-row-detail { display: none; margin-top: 6px; }
+.stock-row.expanded .stock-row-detail { display: block; }
 .stock-row-meta {
   display: flex;
   justify-content: space-between;
   font-size: 11px;
   color: var(--muted);
-  margin: 3px 0 5px;
+  margin: 0 0 5px;
 }
 .stock-gain-row {
   display: flex;
