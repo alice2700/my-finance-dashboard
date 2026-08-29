@@ -459,6 +459,37 @@ function renderOverview(trend) {
   renderMarketNote(trend);
   renderAssetChart();
   renderBalanceChart();
+  renderAssetOwnerCoverageNote(trend);
+}
+
+// 家庭視角下，資產走勢裡有多少是「還沒納入 MG 資料」的區間——用來避免混合線圖看起來像單純的 0，
+// 讓使用者知道那段時間不是「MG 資產是 0」，而是「MG 那時候還沒開始記錄」
+function renderAssetOwnerCoverageNote(trend) {
+  const el = document.getElementById("assetOwnerCoverageNote");
+  if (!el) return;
+  if (ownerFilter !== "all" || !trend.length) {
+    el.textContent = "";
+    return;
+  }
+  const mgBalances = rawBalances.filter((b) => b.owner === "MG");
+  if (!mgBalances.length) {
+    el.textContent = "目前資產走勢僅計入 YT 的資料，MG 尚未新增任何資產快照。";
+    return;
+  }
+  const earliestMg = mgBalances.reduce((min, b) => {
+    const d = new Date(b.recorded_at);
+    return !min || d < min ? d : min;
+  }, null);
+  const mgYear = earliestMg.getFullYear();
+  const mgMonth = earliestMg.getMonth() + 1;
+  const mgKey = mgYear * 12 + mgMonth;
+  const trendStart = trend[0];
+  const trendStartKey = trendStart.year * 12 + trendStart.month;
+  if (mgKey <= trendStartKey) {
+    el.textContent = "";
+    return;
+  }
+  el.textContent = `${mgYear}/${mgMonth} 之前的資產走勢僅計入 YT 的資料，MG 的資產資料從 ${mgYear}/${mgMonth} 起才開始記錄。`;
 }
 
 // ---------- 資產組成：活存（分帳戶）/ 定存（分帳戶）/ 台股 / 美股 ----------
@@ -983,6 +1014,18 @@ function renderCashflowView() {
 
 // 月度制群組：實際花費 vs 該期間預算金額，<80%綠、80-100%黃、>100%紅
 // 累積制群組（旅遊基金）：不受頁面月/年切換影響，永遠顯示「今年至今」的提撥額度 vs 實際花費（排除 is_special）
+// 目前篩選的 owner，在目前導覽的期間（月或年）內是否有任何一筆交易——
+// 用來分辨「這個月/年真的沒記帳（尚無資料）」跟「這個分類真的花費 0 元」
+function periodHasAnyTxn() {
+  return allTxns.some((t) => {
+    const y = parseInt(t.date.slice(0, 4), 10);
+    const m = parseInt(t.date.slice(5, 7), 10);
+    if (y !== cashflowYear) return false;
+    if (cashflowRange === "month" && m !== cashflowMonth) return false;
+    return true;
+  });
+}
+
 function renderBudgetStatus() {
   const container = document.getElementById("budgetGroupsList");
   if (!container) return;
@@ -990,6 +1033,7 @@ function renderBudgetStatus() {
     container.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚未設定預算群組</span></div>';
     return;
   }
+  const periodHasData = periodHasAnyTxn();
 
   const rows = budgetGroups.map((g) => {
     if (g.mode === "cumulative") {
@@ -1016,6 +1060,15 @@ function renderBudgetStatus() {
     const months = cashflowRange === "year" ? Array.from({ length: 12 }, (_, i) => i + 1) : [cashflowMonth];
     let budget = 0;
     months.forEach((m) => { budget += g.amounts[cashflowYear + "-" + m] || 0; });
+
+    if (!periodHasData) {
+      return `<div class="budget-row">
+        <span class="budget-dot"></span>
+        <span class="budget-name">${g.name}</span>
+        <span class="budget-value">這段期間尚無資料</span>
+      </div>`;
+    }
+
     let actual = 0;
     allTxns.forEach((t) => {
       if (t.type !== "expense" || t.is_pending) return;
