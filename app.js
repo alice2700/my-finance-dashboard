@@ -35,6 +35,18 @@ const OWNER_BY_EMAIL = {
 let myOwner = "YT"; // 目前登入者，決定新增資料時預設標記給誰
 let ownerFilter = localStorage.getItem("ownerFilter") || "all"; // all | YT | MG，決定畫面上看到的資料範圍
 
+// 輸入頁「新增資產快照」表單的帳戶名稱下拉建議，依登入身份分開，避免兩人的帳戶名稱混在同一份清單裡
+const ACCOUNT_NAMES_BY_OWNER = {
+  YT: ["國泰-證券", "國泰-生活", "國泰-備用", "富邦", "linebank-主帳戶", "linebank-口袋帳戶", "郵局", "台幣定存", "外幣定存", "外幣活存", "股票", "Linepay Money"],
+  MG: ["新光銀行", "國泰", "linebank-主帳戶", "linebank-口袋帳戶", "郵局", "外幣活存", "股票", "Linepay Money"],
+};
+
+function renderAccountNameOptions() {
+  const el = document.getElementById("accountNames");
+  if (!el) return;
+  el.innerHTML = (ACCOUNT_NAMES_BY_OWNER[myOwner] || []).map((name) => `<option value="${name}"></option>`).join("");
+}
+
 function filterByOwner(rows) {
   return ownerFilter === "all" ? (rows || []) : (rows || []).filter((r) => r.owner === ownerFilter);
 }
@@ -102,6 +114,7 @@ document.getElementById("logoutBtn").addEventListener("click", () => sb.auth.sig
 sb.auth.onAuthStateChange((event, session) => {
   if (event === "SIGNED_IN" && session) {
     myOwner = OWNER_BY_EMAIL[session.user.email] || "YT";
+    renderAccountNameOptions();
     showApp();
     loadData();
   } else if (event === "SIGNED_OUT") {
@@ -113,6 +126,7 @@ async function initAuth() {
   const { data: { session } } = await sb.auth.getSession();
   if (session) {
     myOwner = OWNER_BY_EMAIL[session.user.email] || "YT";
+    renderAccountNameOptions();
     showApp();
     loadData();
   } else {
