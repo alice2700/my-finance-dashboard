@@ -53,6 +53,22 @@ function filterByOwner(rows) {
   return ownerFilter === "all" ? (rows || []) : (rows || []).filter((r) => r.owner === ownerFilter);
 }
 
+// 目標頁（FIRE/購屋/年度儲蓄）目前只設計成家庭視角，切到個人視角時整頁藏起來，
+// 避免看到「像是我個人的目標」但其實是家庭共用數字，造成誤會
+function updateGoalsTabVisibility() {
+  const goalsTab = document.querySelector('.tab[data-page="goals"]');
+  if (!goalsTab) return;
+  const hide = ownerFilter !== "all";
+  goalsTab.classList.toggle("hidden", hide);
+  if (hide && goalsTab.classList.contains("active")) {
+    goalsTab.classList.remove("active");
+    document.getElementById("page-goals").classList.add("hidden");
+    const overviewTab = document.querySelector('.tab[data-page="overview"]');
+    overviewTab.classList.add("active");
+    document.getElementById("page-overview").classList.remove("hidden");
+  }
+}
+
 document.getElementById("ownerFilterToggle").addEventListener("click", (e) => {
   const btn = e.target.closest(".segmented-btn");
   if (!btn || btn.dataset.owner === ownerFilter) return;
@@ -61,6 +77,7 @@ document.getElementById("ownerFilterToggle").addEventListener("click", (e) => {
   document.querySelectorAll("#ownerFilterToggle .segmented-btn").forEach((b) => b.classList.toggle("active", b === btn));
   detailEditingId = null;
   detailAddingNew = false;
+  updateGoalsTabVisibility();
   processAndRender();
 });
 
@@ -117,6 +134,7 @@ sb.auth.onAuthStateChange((event, session) => {
   if (event === "SIGNED_IN" && session) {
     myOwner = OWNER_BY_EMAIL[session.user.email] || "YT";
     renderAccountNameOptions();
+    updateGoalsTabVisibility();
     showApp();
     loadData();
   } else if (event === "SIGNED_OUT") {
@@ -129,6 +147,7 @@ async function initAuth() {
   if (session) {
     myOwner = OWNER_BY_EMAIL[session.user.email] || "YT";
     renderAccountNameOptions();
+    updateGoalsTabVisibility();
     showApp();
     loadData();
   } else {
@@ -254,14 +273,17 @@ function buildAssetTrend(snapshots, balances, txns) {
 
   // 每個帳戶在每個月取「當月最新一筆」餘額
   // account_type：cash=活期存款、investment=定存/基金/儲蓄險等、stock=股票
-  const latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
+  // key 用 owner+帳戶名稱組合，不能只用帳戶名稱——YT/MG 的帳戶名稱下拉選單有好幾個是共用的
+  // （linebank-主帳戶、郵局、股票…），只用帳戶名稱當 key 在家庭視角下會讓其中一人的資料被覆蓋掉
+  const latestByAccountMonth = {}; // "y-m" -> { "owner||accountName": balanceRow }
   (balances || []).forEach((b) => {
     const d = new Date(b.recorded_at);
     const key = d.getFullYear() + "-" + (d.getMonth() + 1);
+    const acctKey = b.owner + "||" + b.account_name;
     if (!latestByAccountMonth[key]) latestByAccountMonth[key] = {};
-    const cur = latestByAccountMonth[key][b.account_name];
+    const cur = latestByAccountMonth[key][acctKey];
     if (!cur || new Date(b.recorded_at) > new Date(cur.recorded_at)) {
-      latestByAccountMonth[key][b.account_name] = b;
+      latestByAccountMonth[key][acctKey] = b;
     }
   });
 
@@ -296,11 +318,13 @@ function buildAssetTrend(snapshots, balances, txns) {
 
   // 每個帳戶「不分月份」的最新一筆餘額，用來當股票市值來源
   // （目前主要用於 GOOGLEFINANCE 抓不到價格的標的，帳戶名稱要記得跟股票代號一致）
+  // 同樣用 owner+帳戶名稱組合當 key，理由同上
   const latestBalanceByAccount = {};
   (balances || []).forEach((b) => {
-    const cur = latestBalanceByAccount[b.account_name];
+    const acctKey = b.owner + "||" + b.account_name;
+    const cur = latestBalanceByAccount[acctKey];
     if (!cur || new Date(b.recorded_at) > new Date(cur.recorded_at)) {
-      latestBalanceByAccount[b.account_name] = b;
+      latestBalanceByAccount[acctKey] = b;
     }
   });
 
@@ -523,11 +547,16 @@ function renderAssetComposition(year, month) {
 
   if (labelEl) labelEl.textContent = isLatest ? "" : `${year}/${month}`;
 
+  // source 現在是用 "owner||帳戶名稱" 當 key，顯示名稱要另外從 b.account_name 拿；
+  // 家庭視角下兩人可能有同名帳戶（例如都叫「股票」），額外標一下是誰的避免看錯
   const cashAccounts = [];
   const investmentAccounts = [];
-  Object.entries(source).forEach(([name, b]) => {
+  const manualStockAccounts = [];
+  Object.values(source).forEach((b) => {
+    const name = ownerFilter === "all" ? `${b.account_name}（${b.owner}）` : b.account_name;
     if (b.account_type === "cash") cashAccounts.push({ name, value: Number(b.balance) });
     else if (b.account_type === "investment") investmentAccounts.push({ name, value: Number(b.balance) });
+    else if (b.account_type === "stock") manualStockAccounts.push({ name, value: Number(b.balance) });
   });
   cashAccounts.sort((a, b) => b.value - a.value);
   investmentAccounts.sort((a, b) => b.value - a.value);
@@ -536,6 +565,8 @@ function renderAssetComposition(year, month) {
   if (isLatest) {
     if (assetCompositionStockTotals.tw != null) stockRows.push({ name: "台股", value: assetCompositionStockTotals.tw });
     if (assetCompositionStockTotals.us != null) stockRows.push({ name: "美股", value: assetCompositionStockTotals.us });
+    // account_balances 裡手動記錄的股票總額（例如 MG 目前用這種方式記錄，還沒有逐筆 stock_transactions）
+    stockRows.push(...manualStockAccounts);
   } else {
     const trendPoint = overviewTrend.find((t) => t.year === year && t.month === month);
     if (trendPoint && trendPoint.stockPart) stockRows.push({ name: "股票（合計，無法拆分台美股）", value: trendPoint.stockPart });
@@ -1728,14 +1759,16 @@ document.getElementById("investNextYear").addEventListener("click", () => {
 // ---------- 股票均價/損益（加權平均成本法，現金股利不影響成本，另外算總報酬） ----------
 let stockPositions = {};
 let latestBalanceByAccount = {};
-let latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
+let latestByAccountMonth = {}; // "y-m" -> { "owner||accountName": balanceRow }
 let allStockTxns = [];
 let allCategories = [];
 let stockPrices = {}; // ticker -> { price, price_date }，抓不到 Apps Script 即時報價時的收盤價備援
 
 // 股票市值備援順序：Apps Script 即時價 -> account_balances 手動記錄 -> stock_prices 昨日收盤價 × 股數
 function fallbackMarketValue(code, shares) {
-  if (latestBalanceByAccount[code]) return Number(latestBalanceByAccount[code].balance);
+  // latestBalanceByAccount 的 key 是 "owner||帳戶名稱"，這裡只在乎帳戶名稱是不是等於股票代號，跟 owner 無關
+  const manual = Object.values(latestBalanceByAccount).find((b) => b.account_name === code);
+  if (manual) return Number(manual.balance);
   const p = stockPrices[code];
   if (p && shares > 0) return Number(p.price) * shares;
   return null;
