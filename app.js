@@ -391,6 +391,8 @@ function processAndRender() {
 
     renderStockInvested(stockTxns);
     renderInvestCalendar();
+    renderBudgetSettings();
+    renderGoalsSettingsForm();
 
     document.getElementById("updatedAt").textContent =
       "更新於 " + new Date().toLocaleString("zh-TW", { hour12: false });
@@ -2288,6 +2290,233 @@ async function parseStatementCsv(text) {
   });
 
   return { format: isTW ? "TW" : "US", results };
+}
+
+// ---------- 輸入頁：預算設定 ----------
+let budgetSettingsExpandedId = null; // budget_group_id，或 "new"；null 代表全部收合
+let budgetSettingsSelectedCats = new Set(); // 目前展開編輯中的群組，勾選的 category_id
+
+function toggleBudgetGroupEdit(id) {
+  if (String(budgetSettingsExpandedId) === String(id)) {
+    budgetSettingsExpandedId = null;
+  } else {
+    budgetSettingsExpandedId = id;
+    const g = id === "new" ? null : budgetGroups.find((x) => String(x.id) === String(id));
+    budgetSettingsSelectedCats = new Set(g ? g.categoryIds : []);
+  }
+  renderBudgetSettings();
+}
+
+function renderBudgetGroupForm(group) {
+  const isNew = !group;
+  const expenseCats = allCategories.filter((c) => c.type === "expense");
+  const byMid = {};
+  expenseCats.forEach((c) => { (byMid[c.mid_name] = byMid[c.mid_name] || []).push(c); });
+  const catsHtml = Object.keys(byMid).map((mid) => `
+    <div class="budget-cat-group">
+      <div class="stat-sub">${mid}</div>
+      <div class="filter-chip-list">
+        ${byMid[mid].map((c) => `<label class="filter-chip${budgetSettingsSelectedCats.has(c.id) ? " active" : ""}" data-cat-id="${c.id}">
+          <input type="checkbox" ${budgetSettingsSelectedCats.has(c.id) ? "checked" : ""} />${c.item_name}
+        </label>`).join("")}
+      </div>
+    </div>
+  `).join("");
+
+  const now = new Date();
+  return `<div class="budget-edit-form entry-form" data-mode="${isNew ? "new" : "edit"}" data-id="${group ? group.id : ""}">
+    ${isNew ? `
+      <label>名稱<input type="text" class="bg-name" required /></label>
+      <label>類型
+        <select class="bg-mode">
+          <option value="monthly">月度制（每月固定額度，例如飲食、娛樂）</option>
+          <option value="cumulative">累積制（逐月提撥、累積比對，例如旅遊基金）</option>
+        </select>
+      </label>
+    ` : ""}
+    <label>涵蓋分類</label>
+    <div class="budget-cat-picker">${catsHtml}</div>
+    <label>${isNew ? "初始金額設定" : "批次設定金額"}</label>
+    <div style="display:flex;gap:8px;">
+      <label style="flex:1;">起始年<input type="number" class="bg-start-year" value="${now.getFullYear()}" inputmode="numeric" /></label>
+      <label style="flex:1;">起始月<input type="number" class="bg-start-month" min="1" max="12" value="${now.getMonth() + 1}" inputmode="numeric" /></label>
+    </div>
+    <label>套用未來幾個月<input type="number" class="bg-months" min="1" value="1" inputmode="numeric" /></label>
+    <label>每月金額<input type="number" class="bg-amount" min="0" step="1" inputmode="decimal" /></label>
+    <div style="display:flex;gap:8px;">
+      <button type="button" class="bg-save" style="flex:1;">${isNew ? "建立" : "儲存"}</button>
+      <button type="button" class="bg-cancel" style="flex:1;background:var(--card);color:var(--ink);border:1px solid var(--border);">取消</button>
+    </div>
+    <p class="bg-status entry-message hidden"></p>
+  </div>`;
+}
+
+function wireBudgetGroupForm() {
+  const form = document.querySelector(".budget-edit-form");
+  if (!form) return;
+  const isNew = form.dataset.mode === "new";
+
+  form.querySelectorAll(".filter-chip[data-cat-id]").forEach((chip) => {
+    chip.addEventListener("click", (e) => {
+      e.preventDefault();
+      const id = Number(chip.dataset.catId);
+      if (budgetSettingsSelectedCats.has(id)) budgetSettingsSelectedCats.delete(id);
+      else budgetSettingsSelectedCats.add(id);
+      renderBudgetSettings();
+    });
+  });
+
+  form.querySelector(".bg-cancel").addEventListener("click", () => {
+    budgetSettingsExpandedId = null;
+    renderBudgetSettings();
+  });
+
+  form.querySelector(".bg-save").addEventListener("click", async () => {
+    const saveBtn = form.querySelector(".bg-save");
+    const statusEl = form.querySelector(".bg-status");
+    const showError = (msg) => {
+      statusEl.textContent = msg;
+      statusEl.className = "bg-status entry-message error";
+      statusEl.classList.remove("hidden");
+      saveBtn.disabled = false;
+    };
+
+    const startYear = Number(form.querySelector(".bg-start-year").value);
+    const startMonth = Number(form.querySelector(".bg-start-month").value);
+    const months = Math.max(1, Number(form.querySelector(".bg-months").value) || 1);
+    const amount = Number(form.querySelector(".bg-amount").value);
+    const catIds = [...budgetSettingsSelectedCats];
+
+    if (!catIds.length) { showError("至少要勾選一個分類"); return; }
+    if (form.querySelector(".bg-amount").value === "" || Number.isNaN(amount)) { showError("請輸入金額"); return; }
+
+    let groupId = form.dataset.id;
+    let name, mode;
+    if (isNew) {
+      name = form.querySelector(".bg-name").value.trim();
+      mode = form.querySelector(".bg-mode").value;
+      if (!name) { showError("請輸入名稱"); return; }
+    }
+
+    saveBtn.disabled = true;
+    statusEl.classList.remove("hidden");
+    statusEl.className = "bg-status entry-message";
+    statusEl.textContent = isNew ? "建立中..." : "儲存中...";
+
+    if (isNew) {
+      const { data, error } = await sb.from("budget_groups").insert({ name, mode }).select().single();
+      if (error) { showError("建立失敗：" + error.message); return; }
+      groupId = data.id;
+    }
+
+    const { error: delCatErr } = await sb.from("budget_group_categories").delete().eq("budget_group_id", groupId);
+    if (delCatErr) { showError("分類設定失敗：" + delCatErr.message); return; }
+    const { error: insCatErr } = await sb.from("budget_group_categories").insert(catIds.map((id) => ({ budget_group_id: groupId, category_id: id })));
+    if (insCatErr) { showError("分類設定失敗：" + insCatErr.message); return; }
+
+    const amountRows = [];
+    let y = startYear;
+    let m = startMonth;
+    for (let i = 0; i < months; i++) {
+      amountRows.push({ budget_group_id: groupId, year: y, month: m, amount });
+      m++;
+      if (m > 12) { m = 1; y++; }
+    }
+    const { error: amtErr } = await sb.from("budget_amounts").upsert(amountRows, { onConflict: "budget_group_id,year,month" });
+    if (amtErr) { showError("金額設定失敗：" + amtErr.message); return; }
+
+    budgetSettingsExpandedId = null;
+    await loadData(); // 預算設定改動頻率低，直接重抓一次最不容易漏掉一致性
+  });
+}
+
+function renderBudgetSettings() {
+  const el = document.getElementById("budgetSettingsList");
+  if (!el) return;
+  if (!budgetGroups.length) {
+    el.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚未設定預算群組</span></div>';
+  } else {
+    const now = new Date();
+    const curKey = now.getFullYear() + "-" + (now.getMonth() + 1);
+    el.innerHTML = budgetGroups.map((g) => {
+      const amount = g.amounts[curKey] || 0;
+      const isOpen = String(budgetSettingsExpandedId) === String(g.id);
+      return `<div class="budget-settings-row">
+        <button type="button" class="budget-settings-header" data-id="${g.id}">
+          <span class="budget-name">${g.name}</span>
+          <span class="stat-sub">${g.mode === "cumulative" ? "累積制・月提撥 " : "月度制・本月 "}${fmt(amount)}</span>
+        </button>
+        ${isOpen ? renderBudgetGroupForm(g) : ""}
+      </div>`;
+    }).join("");
+  }
+
+  if (budgetSettingsExpandedId === "new") {
+    el.insertAdjacentHTML("beforeend", renderBudgetGroupForm(null));
+  }
+
+  el.querySelectorAll(".budget-settings-header").forEach((btn) => {
+    btn.addEventListener("click", () => toggleBudgetGroupEdit(btn.dataset.id));
+  });
+  wireBudgetGroupForm();
+}
+
+const budgetSettingsAddBtn = document.getElementById("budgetSettingsAddBtn");
+if (budgetSettingsAddBtn) {
+  budgetSettingsAddBtn.addEventListener("click", () => toggleBudgetGroupEdit("new"));
+}
+
+// ---------- 輸入頁：目標設定 ----------
+function numOrNull(v, transform) {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = Number(v);
+  if (Number.isNaN(n)) return null;
+  return transform ? transform(n) : n;
+}
+
+function renderGoalsSettingsForm() {
+  if (!rawGoalsRow) return;
+  const g = rawGoalsRow;
+  document.getElementById("gsBirthYear").value = g.birth_year ?? "";
+  document.getElementById("gsRetireAge").value = g.target_retire_age ?? "";
+  document.getElementById("gsReturnRate").value = g.expected_return_rate != null ? Number(g.expected_return_rate) * 100 : "";
+  document.getElementById("gsHousePrice").value = g.house_target_price_wan ?? "";
+  document.getElementById("gsDownPct").value = g.down_payment_pct != null ? Number(g.down_payment_pct) * 100 : "";
+  document.getElementById("gsAnnualTarget").value = g.annual_savings_target ?? "";
+}
+
+const goalsSettingsForm = document.getElementById("goalsSettingsForm");
+if (goalsSettingsForm) {
+  goalsSettingsForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("gsSubmit");
+    const msgEl = document.getElementById("gsMessage");
+    btn.disabled = true;
+    msgEl.classList.add("hidden");
+
+    const fields = {
+      birth_year: numOrNull(document.getElementById("gsBirthYear").value),
+      target_retire_age: numOrNull(document.getElementById("gsRetireAge").value),
+      expected_return_rate: numOrNull(document.getElementById("gsReturnRate").value, (v) => v / 100),
+      house_target_price_wan: numOrNull(document.getElementById("gsHousePrice").value),
+      down_payment_pct: numOrNull(document.getElementById("gsDownPct").value, (v) => v / 100),
+      annual_savings_target: numOrNull(document.getElementById("gsAnnualTarget").value),
+    };
+
+    const { error } = await sb.from("goals_assumptions").update(fields).eq("user_id", rawGoalsRow.user_id);
+    btn.disabled = false;
+    if (error) {
+      msgEl.textContent = "儲存失敗：" + error.message;
+      msgEl.className = "entry-message error";
+      msgEl.classList.remove("hidden");
+      return;
+    }
+    Object.assign(rawGoalsRow, fields);
+    msgEl.textContent = "已儲存";
+    msgEl.className = "entry-message success";
+    msgEl.classList.remove("hidden");
+    processAndRender();
+  });
 }
 
 let stockCsvParsedRows = [];

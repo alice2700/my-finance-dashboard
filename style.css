@@ -509,6 +509,25 @@ html, body {
   border-bottom: 1px solid var(--border);
 }
 .budget-row:last-child { border-bottom: none; }
+
+.budget-settings-row { border-bottom: 1px solid var(--border); }
+.budget-settings-row:last-child { border-bottom: none; }
+.budget-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 10px 0;
+  cursor: pointer;
+  font: inherit;
+  gap: 8px;
+}
+.budget-edit-form { padding: 4px 0 14px; }
+.budget-cat-group { margin-bottom: 10px; }
+.budget-cat-group:last-child { margin-bottom: 0; }
 .budget-dot {
   width: 9px;
   height: 9px;

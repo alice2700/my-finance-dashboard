@@ -317,6 +317,26 @@
         <div id="reconcileStatus" class="entry-message" style="margin-top:8px;"></div>
         <div id="reconcileResult" style="margin-top:10px;"></div>
       </div>
+
+      <div class="card">
+        <div class="card-title">預算設定</div>
+        <div id="budgetSettingsList"></div>
+        <button type="button" id="budgetSettingsAddBtn" class="detail-add-btn">＋ 新增預算群組</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">目標設定</div>
+        <form id="goalsSettingsForm" class="entry-form">
+          <label>出生年<input type="number" id="gsBirthYear" inputmode="numeric" /></label>
+          <label>預計退休年齡<input type="number" id="gsRetireAge" inputmode="numeric" /></label>
+          <label>預期年化報酬率（%）<input type="number" id="gsReturnRate" step="0.1" inputmode="decimal" /></label>
+          <label>購屋房價目標（萬）<input type="number" id="gsHousePrice" step="1" inputmode="decimal" /></label>
+          <label>頭期款比例（%）<input type="number" id="gsDownPct" step="1" inputmode="decimal" /></label>
+          <label>年度儲蓄目標<input type="number" id="gsAnnualTarget" step="1000" inputmode="decimal" /></label>
+          <button type="submit" id="gsSubmit">儲存</button>
+          <p id="gsMessage" class="entry-message hidden"></p>
+        </form>
+      </div>
     </section>
 
     <div id="loadError" class="card error hidden">
