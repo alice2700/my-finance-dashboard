@@ -176,6 +176,8 @@ html, body {
 }
 .stat-label {
   font-size: 11px;
+  line-height: 1.4;
+  min-height: 2.8em;
   color: var(--muted);
   letter-spacing: 0.5px;
   margin-bottom: 8px;
