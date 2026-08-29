@@ -793,7 +793,7 @@ function buildFlowHierarchy(txnList, catInfo) {
     if (!g.items[info.item_name]) g.items[info.item_name] = { value: 0, txns: [] };
     const it = g.items[info.item_name];
     it.value += amt;
-    it.txns.push({ date: t.date, note: t.note, amount: amt });
+    it.txns.push({ date: t.date, note: t.note, amount: amt, owner: t.owner });
   });
   return Object.keys(groups)
     .map((name) => {
@@ -856,7 +856,10 @@ function renderFlowHierarchy(container, groups, kind) {
       it.txns.forEach((tx) => {
         const row = document.createElement("div");
         row.className = "flow-tx-row";
-        row.innerHTML = `<span class="flow-tx-date">${tx.date.slice(5)}</span><span class="flow-tx-note">${tx.note || ""}</span><span class="flow-tx-amount">${fmt(tx.amount)}</span>`;
+        const dot = ownerFilter === "all" && tx.owner
+          ? `<span class="flow-tx-owner-dot" style="background:${tx.owner === "MG" ? COLOR_MG_STACK : COLOR_YT_STACK}" title="${tx.owner}"></span>`
+          : "";
+        row.innerHTML = `<span class="flow-tx-date">${tx.date.slice(5)}</span>${dot}<span class="flow-tx-note">${tx.note || ""}</span><span class="flow-tx-amount">${fmt(tx.amount)}</span>`;
         itemBody.appendChild(row);
       });
       body.appendChild(itemEl);
