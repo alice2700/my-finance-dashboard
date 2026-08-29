@@ -364,10 +364,8 @@ function processAndRender() {
 
     renderDividendCalendar();
 
-    if (trend.length) {
-      renderGoals(buildGoals(goalsRow, trend));
-      renderYearlyReview(trend, allTxns, goalsRow, stockTxns);
-    }
+    renderGoals(buildGoals(goalsRow, trend));
+    renderYearlyReview(trend, allTxns, goalsRow, stockTxns);
 
     renderStockInvested(stockTxns);
     renderInvestCalendar();
@@ -399,7 +397,7 @@ function showLoadError(err) {
 // 退休預估資產 = 目前資產 × (1+期望報酬率)^(退休年齡-目前年齡)（不含後續儲蓄）
 // 購屋頭期款 = 房價目標(萬) × 10000 × 頭期款比例
 function buildGoals(goalsRow, trend) {
-  if (!goalsRow) return null;
+  if (!goalsRow || !trend.length) return null;
   const currentAsset = trend[trend.length - 1].asset;
   const currentYear = new Date().getFullYear();
   const currentAge = goalsRow.birth_year ? currentYear - goalsRow.birth_year : null;
@@ -434,8 +432,26 @@ let assetSeries = "total"; // total | cash | stock
 let balanceRange = "12"; // 12 | all
 
 function renderOverview(trend) {
-  if (!trend || !trend.length) return;
-  overviewTrend = trend;
+  overviewTrend = trend || [];
+  if (!trend || !trend.length) {
+    document.getElementById("labelAsset").textContent = "資產淨值";
+    document.getElementById("labelIncome").textContent = "收入";
+    document.getElementById("labelExpense").textContent = "生活支出";
+    document.getElementById("labelBalance").textContent = "結餘";
+    ["statAsset", "statIncome", "statExpense", "statBalance"].forEach((id) => {
+      document.getElementById(id).textContent = "—";
+    });
+    document.getElementById("statAssetGrowth").textContent = "";
+    document.getElementById("balanceCard").classList.remove("accent-income", "accent-expense");
+    document.getElementById("marketContributionNote").innerHTML = "";
+    document.getElementById("assetHoverNote").textContent = "這個視角目前尚無資產資料";
+    charts.asset && charts.asset.destroy();
+    charts.incomeExpense && charts.incomeExpense.destroy();
+    assetCompositionStockTotals = { tw: null, us: null };
+    renderAssetComposition();
+    renderAssetOwnerCoverageNote(trend || []);
+    return;
+  }
   const latest = trend[trend.length - 1];
   const first = trend[0];
   const growth = first.asset ? (((latest.asset - first.asset) / first.asset) * 100).toFixed(0) : null;
@@ -1434,7 +1450,16 @@ document.getElementById("cashflowRangeToggle").addEventListener("click", (e) => 
 
 // ---------- 長期目標 ----------
 function renderGoals(goals) {
-  if (!goals) return;
+  if (!goals) {
+    document.getElementById("goalCurrentAsset").textContent = "—";
+    document.getElementById("goalFireTarget").textContent = "這個視角目前尚無資產資料";
+    document.getElementById("fireProgressBar").style.width = "0%";
+    document.getElementById("fireProgressNote").textContent = "";
+    document.getElementById("goalHouseTarget").textContent = "—";
+    document.getElementById("goalHouseNote").textContent = "";
+    document.querySelectorAll("#fireMilestones .milestone-badge").forEach((b) => b.classList.remove("achieved"));
+    return;
+  }
   document.getElementById("goalCurrentAsset").textContent = fmt(goals.currentAsset);
   document.getElementById("goalFireTarget").textContent = "目標 " + fmt(goals.fireTarget);
   const pct = goals.fireTarget ? Math.min(100, (goals.currentAsset / goals.fireTarget) * 100) : 0;
@@ -1461,10 +1486,12 @@ function renderYearlyReview(trend, txns, goalsRow, stockTxns) {
     if (trend[i].income - trend[i].expense >= 0) streak++;
     else break;
   }
-  document.getElementById("positiveStreakValue").textContent = streak + " 個月";
-  document.getElementById("positiveStreakNote").textContent = streak > 0
-    ? `最近連續 ${streak} 個月收入大於支出（含本月）`
-    : "最近一個月是負結餘，還沒開始累積";
+  document.getElementById("positiveStreakValue").textContent = trend.length ? streak + " 個月" : "—";
+  document.getElementById("positiveStreakNote").textContent = !trend.length
+    ? "這個視角目前尚無資產走勢資料，無法計算"
+    : streak > 0
+      ? `最近連續 ${streak} 個月收入大於支出（含本月）`
+      : "最近一個月是負結餘，還沒開始累積";
 
   const now = new Date();
   const year = now.getFullYear();
@@ -1791,8 +1818,12 @@ function renderStocks(stocks) {
   const usEl = document.getElementById("stockTableUS");
   const summaryEl = document.getElementById("stocksSummary");
 
-  const fromApi = (stocks || []).map(parseStock);
-  const apiCodes = new Set(fromApi.map((s) => s.code));
+  // Apps Script 的股價來源不分 owner（它是外部的 Google試算表，本來就只知道有哪些代號），
+  // 所以這裡要自己再用 stockPositions（已經依 owner 篩過）擋一次，
+  // 不然切到沒有任何股票交易紀錄的 owner 時，畫面還是會照樣顯示 Apps Script 抓到的整批股票
+  const parsedApi = (stocks || []).map(parseStock);
+  const apiCodes = new Set(parsedApi.map((s) => s.code));
+  const fromApi = parsedApi.filter((s) => stockPositions[s.code] && stockPositions[s.code].shares > 0.0001);
 
   // stockPositions 裡有、但 Apps Script 沒回傳現價的（目前主要是美股），另外補一列進來
   const extra = Object.keys(stockPositions)
@@ -1809,9 +1840,13 @@ function renderStocks(stocks) {
   const merged = fromApi.concat(extra).map(enrichWithPosition);
 
   if (!merged.length) {
-    twEl.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚無資料，請確認股票分頁已加入「現價」欄位</span></div>';
+    const msg = stocks && stocks.length ? "這個視角目前尚無股票資料" : "尚無資料，請確認股票分頁已加入「現價」欄位";
+    twEl.innerHTML = `<div class="flow-item-top"><span class="flow-item-name">${msg}</span></div>`;
     usEl.innerHTML = "";
     summaryEl.textContent = "";
+    charts.stocks && charts.stocks.destroy();
+    assetCompositionStockTotals = { tw: null, us: null };
+    renderAssetComposition();
     return;
   }
 
