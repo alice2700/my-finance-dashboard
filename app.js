@@ -15,7 +15,8 @@ const COLOR_CLAY = "#C08552";
 const COLOR_INK = "#3D4A3F";
 const COLOR_MUTED = "#8C8577";
 const COLOR_BORDER = "#E8E2D8";
-const COLOR_MG = "#7C93A8"; // 家庭視角資產走勢堆疊圖，MG 那一層用這個顏色跟 YT(sage) 區分
+const COLOR_YT_STACK = "#A9C2D6"; // 家庭視角資產走勢堆疊圖，YT 這層（淺藍）
+const COLOR_MG_STACK = "#AFC4A6"; // MG 這層（淺綠）
 const PIE_COLORS = ["#7C9473", "#C08552", "#B8A088", "#94A897", "#D9B382", "#8C8577", "#A9BFA0", "#CBA37C"];
 
 if (window.ChartDataLabels) {
@@ -455,6 +456,7 @@ let overviewTrend = [];
 let overviewTrendYT = []; // 家庭視角堆疊圖用，其他視角維持空陣列
 let overviewTrendMG = [];
 let assetSeries = "total"; // total | cash | stock
+let assetRange = "all"; // 6 | 12 | 24 | all，資產淨值走勢圖要看多長的時間範圍
 let balanceRange = "12"; // 12 | all
 
 function renderOverview(trend) {
@@ -605,7 +607,7 @@ function seriesValue(t, series) {
 }
 
 function renderAssetChart() {
-  const trend = overviewTrend;
+  const trend = assetRange === "all" ? overviewTrend : overviewTrend.slice(-Number(assetRange));
   const labels = trend.map((t) => t.label);
   const canvas = document.getElementById("chartAsset");
   // 家庭視角：疊 YT/MG 兩層，一眼看出資產走勢裡各自的比例；個人視角維持原本的單線圖
@@ -638,8 +640,8 @@ function renderAssetChart() {
       data: {
         labels,
         datasets: [
-          { label: "YT", data: trend.map((t) => ytByKey[t.year * 12 + t.month] || 0), backgroundColor: COLOR_SAGE, borderRadius: 2, maxBarThickness: 28 },
-          { label: "MG", data: trend.map((t) => mgByKey[t.year * 12 + t.month] || 0), backgroundColor: COLOR_MG, borderRadius: 2, maxBarThickness: 28 },
+          { label: "YT", data: trend.map((t) => ytByKey[t.year * 12 + t.month] || 0), backgroundColor: COLOR_YT_STACK, borderRadius: 2, maxBarThickness: 28 },
+          { label: "MG", data: trend.map((t) => mgByKey[t.year * 12 + t.month] || 0), backgroundColor: COLOR_MG_STACK, borderRadius: 2, maxBarThickness: 28 },
         ],
       },
       options: {
@@ -693,6 +695,9 @@ function renderAssetChart() {
   document.querySelectorAll("#assetSeriesToggle .segmented-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.series === assetSeries);
   });
+  document.querySelectorAll("#assetRangeToggle .segmented-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.range === assetRange);
+  });
 }
 
 // 本月資產變化 − 本月結餘（存錢貢獻） = 市場漲跌等其他貢獻
@@ -737,6 +742,13 @@ document.getElementById("assetSeriesToggle").addEventListener("click", (e) => {
   const btn = e.target.closest(".segmented-btn");
   if (!btn) return;
   assetSeries = btn.dataset.series;
+  renderAssetChart();
+});
+
+document.getElementById("assetRangeToggle").addEventListener("click", (e) => {
+  const btn = e.target.closest(".segmented-btn");
+  if (!btn) return;
+  assetRange = btn.dataset.range;
   renderAssetChart();
 });
 
