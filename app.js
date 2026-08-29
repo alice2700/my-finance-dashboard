@@ -15,6 +15,7 @@ const COLOR_CLAY = "#C08552";
 const COLOR_INK = "#3D4A3F";
 const COLOR_MUTED = "#8C8577";
 const COLOR_BORDER = "#E8E2D8";
+const COLOR_MG = "#7C93A8"; // 家庭視角資產走勢堆疊圖，MG 那一層用這個顏色跟 YT(sage) 區分
 const PIE_COLORS = ["#7C9473", "#C08552", "#B8A088", "#94A897", "#D9B382", "#8C8577", "#A9BFA0", "#CBA37C"];
 
 if (window.ChartDataLabels) {
@@ -209,6 +210,102 @@ async function loadData() {
   }
 }
 
+// 依年/月彙總每個月的收入、支出，再用 asset_snapshots(舊資料)/account_balances(新資料) 組出
+// 每月資產走勢——抽成獨立函式，這樣「目前篩選視角的總走勢」跟「家庭視角下 YT/MG 個別走勢（給堆疊圖用）」
+// 可以共用同一套邏輯，不用寫兩次。純函式，不動任何模組層級的全域變數，呼叫端自己決定要不要把
+// 回傳的 latestByAccountMonth/latestBalanceByAccount 存進全域。
+function buildAssetTrend(snapshots, balances, txns) {
+  // 待銷帳（is_pending）的收入/支出不算「真正的」收支，一律排除在所有統計之外
+  const monthly = {};
+  (txns || []).forEach((t) => {
+    if (t.is_pending) return;
+    const y = parseInt(t.date.slice(0, 4), 10);
+    const m = parseInt(t.date.slice(5, 7), 10);
+    const key = y + "-" + m;
+    if (!monthly[key]) monthly[key] = { income: 0, expense: 0 };
+    monthly[key][t.type] += Number(t.amount);
+  });
+
+  // trend：舊資料讀 asset_snapshots（cash_and_deposits=活期、other_investments=定存、
+  // stock_market_value=股票，2024/2025 目前還沒拆分，全部在活期），
+  // 之後有記錄的月份改讀 account_balances（依帳戶 account_type 拆成活期/定存/股票三類）
+  const snapshotMonths = new Set();
+  const fromSnapshots = (snapshots || []).map((s) => {
+    snapshotMonths.add(s.year + "-" + s.month);
+    const key = s.year + "-" + s.month;
+    const mo = monthly[key] || { income: 0, expense: 0 };
+    const activeDeposit = Number(s.cash_and_deposits || 0);
+    const timeDeposit = Number(s.other_investments || 0);
+    const stockPart = Number(s.stock_market_value || 0);
+    return {
+      year: s.year,
+      month: s.month,
+      label: String(s.year).slice(2) + "/" + s.month,
+      asset: activeDeposit + timeDeposit + stockPart,
+      cashPart: activeDeposit + timeDeposit,
+      activeDeposit,
+      timeDeposit,
+      stockPart,
+      income: mo.income,
+      expense: mo.expense,
+    };
+  });
+
+  // 每個帳戶在每個月取「當月最新一筆」餘額
+  // account_type：cash=活期存款、investment=定存/基金/儲蓄險等、stock=股票
+  const latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
+  (balances || []).forEach((b) => {
+    const d = new Date(b.recorded_at);
+    const key = d.getFullYear() + "-" + (d.getMonth() + 1);
+    if (!latestByAccountMonth[key]) latestByAccountMonth[key] = {};
+    const cur = latestByAccountMonth[key][b.account_name];
+    if (!cur || new Date(b.recorded_at) > new Date(cur.recorded_at)) {
+      latestByAccountMonth[key][b.account_name] = b;
+    }
+  });
+
+  const fromBalances = Object.keys(latestByAccountMonth)
+    .filter((key) => !snapshotMonths.has(key))
+    .map((key) => {
+      const [y, m] = key.split("-").map(Number);
+      let activeDeposit = 0;
+      let timeDeposit = 0;
+      let stockPart = 0;
+      Object.values(latestByAccountMonth[key]).forEach((b) => {
+        if (b.account_type === "stock") stockPart += Number(b.balance);
+        else if (b.account_type === "investment") timeDeposit += Number(b.balance);
+        else activeDeposit += Number(b.balance);
+      });
+      const mo = monthly[key] || { income: 0, expense: 0 };
+      return {
+        year: y,
+        month: m,
+        label: String(y).slice(2) + "/" + m,
+        asset: activeDeposit + timeDeposit + stockPart,
+        cashPart: activeDeposit + timeDeposit,
+        activeDeposit,
+        timeDeposit,
+        stockPart,
+        income: mo.income,
+        expense: mo.expense,
+      };
+    });
+
+  const trend = fromSnapshots.concat(fromBalances).sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+
+  // 每個帳戶「不分月份」的最新一筆餘額，用來當股票市值來源
+  // （目前主要用於 GOOGLEFINANCE 抓不到價格的標的，帳戶名稱要記得跟股票代號一致）
+  const latestBalanceByAccount = {};
+  (balances || []).forEach((b) => {
+    const cur = latestBalanceByAccount[b.account_name];
+    if (!cur || new Date(b.recorded_at) > new Date(cur.recorded_at)) {
+      latestBalanceByAccount[b.account_name] = b;
+    }
+  });
+
+  return { trend, latestByAccountMonth, latestBalanceByAccount };
+}
+
 function processAndRender() {
   const categories = rawCategories;
   const snapshots = ownerFilter === "MG" ? [] : rawSnapshots; // 舊 asset_snapshots 沒有 owner 欄位，本來就是 YT 一人時期的資料
@@ -238,94 +335,19 @@ function processAndRender() {
     const catMap = {};
     (categories || []).forEach((c) => { catMap[c.id] = { item_name: c.item_name, mid_name: c.mid_name || "未分類" }; });
 
-    // 依年/月彙總每個月的收入、支出
-    // 待銷帳（is_pending）的收入/支出不算「真正的」收支，一律排除在所有統計之外
-    const monthly = {};
-    (txns || []).forEach((t) => {
-      if (t.is_pending) return;
-      const y = parseInt(t.date.slice(0, 4), 10);
-      const m = parseInt(t.date.slice(5, 7), 10);
-      const key = y + "-" + m;
-      if (!monthly[key]) monthly[key] = { income: 0, expense: 0 };
-      monthly[key][t.type] += Number(t.amount);
-    });
+    const built = buildAssetTrend(snapshots, balances, txns);
+    const trend = built.trend;
+    latestByAccountMonth = built.latestByAccountMonth;
+    latestBalanceByAccount = built.latestBalanceByAccount;
 
-    // trend：舊資料讀 asset_snapshots（cash_and_deposits=活期、other_investments=定存、
-    // stock_market_value=股票，2024/2025 目前還沒拆分，全部在活期），
-    // 之後有記錄的月份改讀 account_balances（依帳戶 account_type 拆成活期/定存/股票三類）
-    const snapshotMonths = new Set();
-    const fromSnapshots = (snapshots || []).map((s) => {
-      snapshotMonths.add(s.year + "-" + s.month);
-      const key = s.year + "-" + s.month;
-      const mo = monthly[key] || { income: 0, expense: 0 };
-      const activeDeposit = Number(s.cash_and_deposits || 0);
-      const timeDeposit = Number(s.other_investments || 0);
-      const stockPart = Number(s.stock_market_value || 0);
-      return {
-        year: s.year,
-        month: s.month,
-        label: String(s.year).slice(2) + "/" + s.month,
-        asset: activeDeposit + timeDeposit + stockPart,
-        cashPart: activeDeposit + timeDeposit,
-        activeDeposit,
-        timeDeposit,
-        stockPart,
-        income: mo.income,
-        expense: mo.expense,
-      };
-    });
-
-    // 每個帳戶在每個月取「當月最新一筆」餘額
-    // account_type：cash=活期存款、investment=定存/基金/儲蓄險等、stock=股票
-    latestByAccountMonth = {}; // "y-m" -> { accountName: balanceRow }
-    (balances || []).forEach((b) => {
-      const d = new Date(b.recorded_at);
-      const key = d.getFullYear() + "-" + (d.getMonth() + 1);
-      if (!latestByAccountMonth[key]) latestByAccountMonth[key] = {};
-      const cur = latestByAccountMonth[key][b.account_name];
-      if (!cur || new Date(b.recorded_at) > new Date(cur.recorded_at)) {
-        latestByAccountMonth[key][b.account_name] = b;
-      }
-    });
-
-    const fromBalances = Object.keys(latestByAccountMonth)
-      .filter((key) => !snapshotMonths.has(key))
-      .map((key) => {
-        const [y, m] = key.split("-").map(Number);
-        let activeDeposit = 0;
-        let timeDeposit = 0;
-        let stockPart = 0;
-        Object.values(latestByAccountMonth[key]).forEach((b) => {
-          if (b.account_type === "stock") stockPart += Number(b.balance);
-          else if (b.account_type === "investment") timeDeposit += Number(b.balance);
-          else activeDeposit += Number(b.balance);
-        });
-        const mo = monthly[key] || { income: 0, expense: 0 };
-        return {
-          year: y,
-          month: m,
-          label: String(y).slice(2) + "/" + m,
-          asset: activeDeposit + timeDeposit + stockPart,
-          cashPart: activeDeposit + timeDeposit,
-          activeDeposit,
-          timeDeposit,
-          stockPart,
-          income: mo.income,
-          expense: mo.expense,
-        };
-      });
-
-    const trend = fromSnapshots.concat(fromBalances).sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
-
-    // 每個帳戶「不分月份」的最新一筆餘額，用來當股票市值來源
-    // （目前主要用於 GOOGLEFINANCE 抓不到價格的標的，帳戶名稱要記得跟股票代號一致）
-    latestBalanceByAccount = {};
-    (balances || []).forEach((b) => {
-      const cur = latestBalanceByAccount[b.account_name];
-      if (!cur || new Date(b.recorded_at) > new Date(cur.recorded_at)) {
-        latestBalanceByAccount[b.account_name] = b;
-      }
-    });
+    // 家庭視角下，總覽的資產走勢圖要疊 YT/MG 兩層，所以另外各自算一份不受目前 ownerFilter 影響的
+    // 單一owner走勢（asset_snapshots 是 2024-2025 沒有 owner 欄位的舊資料，本來就只屬於 YT）
+    overviewTrendYT = [];
+    overviewTrendMG = [];
+    if (ownerFilter === "all") {
+      overviewTrendYT = buildAssetTrend(rawSnapshots, rawBalances.filter((b) => b.owner === "YT"), rawTxns.filter((t) => t.owner === "YT")).trend;
+      overviewTrendMG = buildAssetTrend([], rawBalances.filter((b) => b.owner === "MG"), rawTxns.filter((t) => t.owner === "MG")).trend;
+    }
 
     stockPositions = buildStockPositions(stockTxns || [], txns || [], catMap);
 
@@ -428,6 +450,8 @@ function buildGoals(goalsRow, trend) {
 
 // ---------- 總覽 ----------
 let overviewTrend = [];
+let overviewTrendYT = []; // 家庭視角堆疊圖用，其他視角維持空陣列
+let overviewTrendMG = [];
 let assetSeries = "total"; // total | cash | stock
 let balanceRange = "12"; // 12 | all
 
@@ -449,7 +473,6 @@ function renderOverview(trend) {
     charts.incomeExpense && charts.incomeExpense.destroy();
     assetCompositionStockTotals = { tw: null, us: null };
     renderAssetComposition();
-    renderAssetOwnerCoverageNote(trend || []);
     return;
   }
   const latest = trend[trend.length - 1];
@@ -475,37 +498,6 @@ function renderOverview(trend) {
   renderMarketNote(trend);
   renderAssetChart();
   renderBalanceChart();
-  renderAssetOwnerCoverageNote(trend);
-}
-
-// 家庭視角下，資產走勢裡有多少是「還沒納入 MG 資料」的區間——用來避免混合線圖看起來像單純的 0，
-// 讓使用者知道那段時間不是「MG 資產是 0」，而是「MG 那時候還沒開始記錄」
-function renderAssetOwnerCoverageNote(trend) {
-  const el = document.getElementById("assetOwnerCoverageNote");
-  if (!el) return;
-  if (ownerFilter !== "all" || !trend.length) {
-    el.textContent = "";
-    return;
-  }
-  const mgBalances = rawBalances.filter((b) => b.owner === "MG");
-  if (!mgBalances.length) {
-    el.textContent = "目前資產走勢僅計入 YT 的資料，MG 尚未新增任何資產快照。";
-    return;
-  }
-  const earliestMg = mgBalances.reduce((min, b) => {
-    const d = new Date(b.recorded_at);
-    return !min || d < min ? d : min;
-  }, null);
-  const mgYear = earliestMg.getFullYear();
-  const mgMonth = earliestMg.getMonth() + 1;
-  const mgKey = mgYear * 12 + mgMonth;
-  const trendStart = trend[0];
-  const trendStartKey = trendStart.year * 12 + trendStart.month;
-  if (mgKey <= trendStartKey) {
-    el.textContent = "";
-    return;
-  }
-  el.textContent = `${mgYear}/${mgMonth} 之前的資產走勢僅計入 YT 的資料，MG 的資產資料從 ${mgYear}/${mgMonth} 起才開始記錄。`;
 }
 
 // ---------- 資產組成：活存（分帳戶）/ 定存（分帳戶）/ 台股 / 美股 ----------
@@ -614,38 +606,82 @@ function renderAssetChart() {
   const trend = overviewTrend;
   const labels = trend.map((t) => t.label);
   const canvas = document.getElementById("chartAsset");
-  renderChart("asset", "chartAsset", {
-    type: "line",
-    data: {
-      labels,
-      datasets: [{
-        data: trend.map((t) => seriesValue(t, assetSeries)),
-        borderColor: COLOR_SAGE,
-        backgroundColor: "rgba(124,148,115,0.12)",
-        fill: true,
-        tension: 0.35,
-        pointRadius: 0,
-        pointHitRadius: 20,
-        borderWidth: 2,
-      }],
-    },
-    options: {
-      ...baseChartOptions(),
-      interaction: { mode: "index", intersect: false },
-      onHover: (evt, elements) => {
-        if (elements && elements.length) {
-          const t = trend[elements[0].index];
-          document.getElementById("assetHoverNote").textContent =
-            `${t.year}/${t.month}：${fmt(seriesValue(t, assetSeries))}`;
-          renderAssetComposition(t.year, t.month);
-        }
+  // 家庭視角：疊 YT/MG 兩層，一眼看出資產走勢裡各自的比例；個人視角維持原本的單線圖
+  const stacked = ownerFilter === "all";
+
+  const ytByKey = {};
+  overviewTrendYT.forEach((t) => { ytByKey[t.year * 12 + t.month] = seriesValue(t, assetSeries); });
+  const mgByKey = {};
+  overviewTrendMG.forEach((t) => { mgByKey[t.year * 12 + t.month] = seriesValue(t, assetSeries); });
+
+  const noteText = (t) => {
+    if (!stacked) return `${t.year}/${t.month}：${fmt(seriesValue(t, assetSeries))}`;
+    const key = t.year * 12 + t.month;
+    const yt = ytByKey[key] || 0;
+    const mg = mgByKey[key] || 0;
+    return `${t.year}/${t.month}：YT ${fmt(yt)}・MG ${fmt(mg)}・合計 ${fmt(yt + mg)}`;
+  };
+  const onHover = (evt, elements) => {
+    if (elements && elements.length) {
+      const t = trend[elements[0].index];
+      document.getElementById("assetHoverNote").textContent = noteText(t);
+      renderAssetComposition(t.year, t.month);
+    }
+  };
+
+  if (stacked) {
+    const chartOpts = baseChartOptions(true);
+    renderChart("asset", "chartAsset", {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          { label: "YT", data: trend.map((t) => ytByKey[t.year * 12 + t.month] || 0), backgroundColor: COLOR_SAGE, borderRadius: 2, maxBarThickness: 28 },
+          { label: "MG", data: trend.map((t) => mgByKey[t.year * 12 + t.month] || 0), backgroundColor: COLOR_MG, borderRadius: 2, maxBarThickness: 28 },
+        ],
       },
-    },
-  });
+      options: {
+        ...chartOpts,
+        scales: {
+          x: { ...chartOpts.scales.x, stacked: true },
+          y: { ...chartOpts.scales.y, stacked: true },
+        },
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          ...chartOpts.plugins,
+          tooltip: { ...chartOpts.plugins.tooltip, callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.raw)}` } },
+        },
+        onHover,
+      },
+    });
+  } else {
+    renderChart("asset", "chartAsset", {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          data: trend.map((t) => seriesValue(t, assetSeries)),
+          borderColor: COLOR_SAGE,
+          backgroundColor: "rgba(124,148,115,0.12)",
+          fill: true,
+          tension: 0.35,
+          pointRadius: 0,
+          pointHitRadius: 20,
+          borderWidth: 2,
+        }],
+      },
+      options: {
+        ...baseChartOptions(),
+        interaction: { mode: "index", intersect: false },
+        onHover,
+      },
+    });
+  }
+
   const note = document.getElementById("assetHoverNote");
   const resetNote = () => {
     const latest = trend[trend.length - 1];
-    note.textContent = `${latest.year}/${latest.month}：${fmt(seriesValue(latest, assetSeries))}`;
+    note.textContent = noteText(latest);
     renderAssetComposition();
   };
   resetNote();
