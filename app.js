@@ -1133,6 +1133,10 @@ function periodHasAnyTxn() {
 function renderBudgetStatus() {
   const container = document.getElementById("budgetGroupsList");
   if (!container) return;
+  // 預算是家庭共用的設定，不分個人，切到 YT/MG 個人視角時這張卡整個藏起來，避免看起來像是個人預算
+  const card = document.getElementById("budgetStatusCard");
+  if (card) card.classList.toggle("hidden", ownerFilter !== "all");
+  if (ownerFilter !== "all") return;
   if (!budgetGroups.length) {
     container.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚未設定預算群組</span></div>';
     return;
