@@ -553,18 +553,19 @@ function renderAssetComposition(year, month) {
   const investmentAccounts = [];
   const manualStockAccounts = [];
   Object.values(source).forEach((b) => {
-    const name = ownerFilter === "all" ? `${b.account_name}（${b.owner}）` : b.account_name;
-    if (b.account_type === "cash") cashAccounts.push({ name, value: Number(b.balance) });
-    else if (b.account_type === "investment") investmentAccounts.push({ name, value: Number(b.balance) });
-    else if (b.account_type === "stock") manualStockAccounts.push({ name, value: Number(b.balance) });
+    const row = { name: b.account_name, owner: b.owner, value: Number(b.balance) };
+    if (b.account_type === "cash") cashAccounts.push(row);
+    else if (b.account_type === "investment") investmentAccounts.push(row);
+    else if (b.account_type === "stock") manualStockAccounts.push(row);
   });
   cashAccounts.sort((a, b) => b.value - a.value);
   investmentAccounts.sort((a, b) => b.value - a.value);
 
   const stockRows = [];
   if (isLatest) {
-    if (assetCompositionStockTotals.tw != null) stockRows.push({ name: "台股", value: assetCompositionStockTotals.tw });
-    if (assetCompositionStockTotals.us != null) stockRows.push({ name: "美股", value: assetCompositionStockTotals.us });
+    // 台股/美股是從 YT 的 stock_transactions/Apps Script 算出來的，目前只有她這樣追蹤
+    if (assetCompositionStockTotals.tw != null) stockRows.push({ name: "台股", owner: "YT", value: assetCompositionStockTotals.tw });
+    if (assetCompositionStockTotals.us != null) stockRows.push({ name: "美股", owner: "YT", value: assetCompositionStockTotals.us });
     // account_balances 裡手動記錄的股票總額（例如 MG 目前用這種方式記錄，還沒有逐筆 stock_transactions）
     stockRows.push(...manualStockAccounts);
   } else {
@@ -605,12 +606,15 @@ function renderAssetComposition(year, month) {
     .map((g) => {
       const groupTotal = g.accounts.reduce((sum, a) => sum + a.value, 0);
       const itemsHtml = g.accounts
-        .map(
-          (a) => `<div class="flow-item-top">
-            <span class="flow-item-name">${a.name}</span>
+        .map((a) => {
+          const dot = ownerFilter === "all" && a.owner
+            ? `<span class="flow-tx-owner-dot" style="background:${a.owner === "MG" ? COLOR_MG_STACK : COLOR_YT_STACK};margin-right:5px;" title="${a.owner}"></span>`
+            : "";
+          return `<div class="flow-item-top">
+            <span class="flow-item-name">${dot}${a.name}</span>
             <span class="flow-item-value">${fmt(a.value)}${total ? `（${((a.value / total) * 100).toFixed(1)}%）` : ""}</span>
-          </div>`
-        )
+          </div>`;
+        })
         .join("");
       return `<div class="flow-group">
         <button class="flow-group-header">
@@ -1300,10 +1304,12 @@ function renderDetailDayList(day) {
           const info = allCatMap[t.category_id] || { item_name: "未分類" };
           const sign = t.type === "income" ? "+" : "-";
           const pendingTag = t.is_pending ? "（待銷帳）" : "";
-          const ownerTag = ownerFilter === "all" ? `｜${t.owner}` : "";
+          const ownerDot = ownerFilter === "all" && t.owner
+            ? `<span class="flow-tx-owner-dot" style="background:${t.owner === "MG" ? COLOR_MG_STACK : COLOR_YT_STACK}" title="${t.owner}"></span>`
+            : "";
           const selectedClass = String(t.id) === String(detailEditingId) ? " selected" : "";
           return `<button type="button" class="detail-tx-row${selectedClass}" data-id="${t.id}">
-            <span class="flow-tx-note">${info.item_name}${pendingTag}｜${t.note || ""}${ownerTag}</span>
+            ${ownerDot}<span class="flow-tx-note">${info.item_name}${pendingTag}｜${t.note || ""}</span>
             <span class="flow-tx-amount">${sign}${fmt(Math.abs(t.amount))}</span>
           </button>`;
         })
