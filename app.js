@@ -533,6 +533,7 @@ function renderOverview(trend) {
     charts.asset && charts.asset.destroy();
     charts.incomeExpense && charts.incomeExpense.destroy();
     assetCompositionStockTotals = { tw: null, us: null };
+    assetCompositionLiveOwners = new Set();
     renderAssetComposition();
     return;
   }
@@ -565,6 +566,9 @@ function renderOverview(trend) {
 // 台股、美股市值等股票分頁資料載入後才知道，先用帳戶餘額畫活存/定存，
 // 股票分頁載入完成後 renderStocks() 會再呼叫一次補上台股/美股
 let assetCompositionStockTotals = { tw: null, us: null };
+// 有逐筆 stock_transactions、算得出即時市值的 owner 集合——這些人手動記在 account_balances 的
+// 「股票」餘額不該再顯示於資產組成，不然會跟台股/美股即時市值重複計算
+let assetCompositionLiveOwners = new Set();
 
 // year/month 省略時顯示最新狀態（含股票分頁即時台股/美股拆分）；
 // 指定 year/month 時顯示該月的歷史快照（活存/定存來自 account_balances 當月最後一筆，
@@ -589,7 +593,7 @@ function renderAssetComposition(year, month) {
     const row = { name: b.account_name, owner: b.owner, value: Number(b.balance) };
     if (b.account_type === "cash") cashAccounts.push(row);
     else if (b.account_type === "investment") investmentAccounts.push(row);
-    else if (b.account_type === "stock") manualStockAccounts.push(row);
+    else if (b.account_type === "stock" && !(isLatest && assetCompositionLiveOwners.has(b.owner))) manualStockAccounts.push(row);
   });
   cashAccounts.sort((a, b) => b.value - a.value);
   investmentAccounts.sort((a, b) => b.value - a.value);
@@ -2069,6 +2073,7 @@ function renderStocks(stocks) {
     summaryEl.textContent = "";
     charts.stocks && charts.stocks.destroy();
     assetCompositionStockTotals = { tw: null, us: null };
+    assetCompositionLiveOwners = new Set();
     renderAssetComposition();
     return;
   }
@@ -2082,10 +2087,11 @@ function renderStocks(stocks) {
     tw: withValue.filter((s) => s.isTW).reduce((sum, s) => sum + s.marketValue, 0),
     us: withValue.filter((s) => !s.isTW).reduce((sum, s) => sum + s.marketValue, 0),
   };
-  renderAssetComposition();
-
   const liveStockByOwner = {};
   withValue.forEach((s) => { liveStockByOwner[s.owner] = (liveStockByOwner[s.owner] || 0) + s.marketValue; });
+  assetCompositionLiveOwners = new Set(Object.keys(liveStockByOwner));
+  renderAssetComposition();
+
   applyLiveStockValueToLatestTrend(liveStockByOwner);
 
   if (withValue.length) {
