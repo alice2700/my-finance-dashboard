@@ -78,7 +78,13 @@ document.getElementById("ownerFilterToggle").addEventListener("click", (e) => {
   detailEditingId = null;
   detailAddingNew = false;
   updateGoalsTabVisibility();
-  processAndRender();
+  // processAndRender() 重畫全部頁面（好幾個 Chart.js 圖表 + 好幾份清單），在手機上可能要一小段時間；
+  // 先讓按鈕按下的樣式畫出來，再用 setTimeout 把真正的重算丟到下一輪，畫面才不會卡在「按了沒反應」的狀態
+  document.getElementById("app").style.opacity = "0.5";
+  setTimeout(() => {
+    processAndRender();
+    document.getElementById("app").style.opacity = "1";
+  }, 0);
 });
 
 // ---------- 分頁切換 ----------
@@ -192,7 +198,7 @@ async function loadData() {
     ] = await Promise.all([
       sb.from("category_map").select("id,item_name,mid_name,type"),
       sb.from("asset_snapshots").select("year,month,cash_and_deposits,other_investments,stock_market_value").order("year").order("month"),
-      sb.from("account_balances").select("account_name,account_type,balance,recorded_at,owner").order("recorded_at"),
+      sb.from("account_balances").select("id,account_name,account_type,balance,recorded_at,note,owner").order("recorded_at"),
       sb.from("transactions").select("id,date,amount,type,category_id,note,is_special,is_pending,pending_group,owner").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
       sb.from("stock_transactions").select("id,ticker,market,stock_name,trade_date,side,shares,amount_twd,buy_type,owner").limit(5000),
@@ -418,6 +424,7 @@ function processAndRender() {
     renderInvestCalendar();
     renderBudgetSettings();
     renderGoalsSettingsForm();
+    renderRecentBalances();
 
     document.getElementById("updatedAt").textContent =
       "更新於 " + new Date().toLocaleString("zh-TW", { hour12: false });
@@ -2095,23 +2102,125 @@ document.getElementById("divNextYear").addEventListener("click", () => {
 const balanceDateInput = document.getElementById("balDate");
 if (balanceDateInput) balanceDateInput.value = new Date().toISOString().slice(0, 10);
 
-const recentBalances = [];
+// 最近的資產快照：只顯示目前登入者自己輸入的（跟帳戶名稱下拉選單一樣依 myOwner 分開），
+// 可以點開修改或刪除——輸入常常會 key 錯，需要能改
+let balanceEditingId = null;
+
 function renderRecentBalances() {
   const el = document.getElementById("balanceRecent");
-  if (!recentBalances.length) {
+  if (!el) return;
+  const mine = (rawBalances || [])
+    .filter((b) => b.owner === myOwner)
+    .slice()
+    .sort((a, b) => new Date(b.recorded_at) - new Date(a.recorded_at))
+    .slice(0, 15);
+
+  if (!mine.length) {
     el.innerHTML = `<div class="flow-item-top"><span class="flow-item-name">尚未新增任何紀錄</span></div>`;
     return;
   }
-  el.innerHTML = recentBalances
-    .map(
-      (b) => `<div class="flow-item">
-        <div class="flow-item-top">
-          <span class="flow-item-name">${b.account_name}（${b.date}）</span>
-          <span class="flow-item-value">${fmt(b.balance)}</span>
-        </div>
-      </div>`
-    )
-    .join("");
+
+  el.innerHTML = mine.map((b) => {
+    const isOpen = String(balanceEditingId) === String(b.id);
+    return `<div class="budget-settings-row">
+      <button type="button" class="budget-settings-header" data-id="${b.id}">
+        <span class="budget-name">${b.account_name}（${String(b.recorded_at).slice(0, 10)}）</span>
+        <span class="stat-sub">${fmt(b.balance)}</span>
+      </button>
+      ${isOpen ? renderBalanceEditForm(b) : ""}
+    </div>`;
+  }).join("");
+
+  el.querySelectorAll(".budget-settings-header").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      balanceEditingId = String(balanceEditingId) === btn.dataset.id ? null : btn.dataset.id;
+      renderRecentBalances();
+    });
+  });
+  wireBalanceEditForm();
+}
+
+function renderBalanceEditForm(b) {
+  const noteVal = (b.note || "").replace(/"/g, "&quot;");
+  return `<div class="balance-edit-form entry-form" data-id="${b.id}">
+    <label>帳戶名稱<input type="text" class="be-name" value="${b.account_name}" /></label>
+    <label>帳戶類型
+      <select class="be-type">
+        <option value="cash"${b.account_type === "cash" ? " selected" : ""}>活期存款</option>
+        <option value="investment"${b.account_type === "investment" ? " selected" : ""}>定存 / 其他投資</option>
+        <option value="stock"${b.account_type === "stock" ? " selected" : ""}>股票</option>
+      </select>
+    </label>
+    <label>餘額<input type="number" class="be-balance" value="${b.balance}" step="1" inputmode="decimal" /></label>
+    <label>日期<input type="date" class="be-date" value="${String(b.recorded_at).slice(0, 10)}" /></label>
+    <label>備註<input type="text" class="be-note" value="${noteVal}" /></label>
+    <div style="display:flex;gap:8px;">
+      <button type="button" class="be-save" style="flex:1;">儲存</button>
+      <button type="button" class="be-cancel" style="flex:1;background:var(--card);color:var(--ink);border:1px solid var(--border);">取消</button>
+      <button type="button" class="be-delete" style="flex:1;background:var(--card);color:var(--clay);border:1px solid var(--clay);">刪除</button>
+    </div>
+    <p class="be-status entry-message hidden"></p>
+  </div>`;
+}
+
+function wireBalanceEditForm() {
+  const form = document.querySelector(".balance-edit-form");
+  if (!form) return;
+  const id = form.dataset.id;
+
+  form.querySelector(".be-cancel").addEventListener("click", () => {
+    balanceEditingId = null;
+    renderRecentBalances();
+  });
+
+  form.querySelector(".be-save").addEventListener("click", async () => {
+    const saveBtn = form.querySelector(".be-save");
+    const statusEl = form.querySelector(".be-status");
+    const fields = {
+      account_name: form.querySelector(".be-name").value.trim(),
+      account_type: form.querySelector(".be-type").value,
+      balance: Number(form.querySelector(".be-balance").value),
+      recorded_at: form.querySelector(".be-date").value,
+      note: form.querySelector(".be-note").value.trim() || null,
+    };
+    saveBtn.disabled = true;
+    statusEl.classList.remove("hidden");
+    statusEl.className = "be-status entry-message";
+    statusEl.textContent = "儲存中...";
+    const { error } = await sb.from("account_balances").update(fields).eq("id", id);
+    saveBtn.disabled = false;
+    if (error) {
+      statusEl.textContent = "儲存失敗：" + error.message;
+      statusEl.className = "be-status entry-message error";
+      statusEl.classList.remove("hidden");
+      return;
+    }
+    const row = rawBalances.find((b) => String(b.id) === String(id));
+    if (row) Object.assign(row, fields);
+    balanceEditingId = null;
+    processAndRender();
+  });
+
+  form.querySelector(".be-delete").addEventListener("click", async () => {
+    const deleteBtn = form.querySelector(".be-delete");
+    const statusEl = form.querySelector(".be-status");
+    if (!confirm("確定要刪除這筆資產快照嗎？這個動作沒辦法復原。")) return;
+    deleteBtn.disabled = true;
+    statusEl.classList.remove("hidden");
+    statusEl.className = "be-status entry-message";
+    statusEl.textContent = "刪除中...";
+    const { error } = await sb.from("account_balances").delete().eq("id", id);
+    deleteBtn.disabled = false;
+    if (error) {
+      statusEl.textContent = "刪除失敗：" + error.message;
+      statusEl.className = "be-status entry-message error";
+      statusEl.classList.remove("hidden");
+      return;
+    }
+    rawBalances = rawBalances.filter((b) => String(b.id) !== String(id));
+    balanceEditingId = null;
+    processAndRender();
+  });
 }
 
 // ---------- 外幣帳戶：即時匯率換算 ----------
@@ -2187,14 +2296,14 @@ if (balanceForm) {
     btn.textContent = "新增中...";
     msgEl.classList.add("hidden");
 
-    const { error } = await sb.from("account_balances").insert({
+    const { data, error } = await sb.from("account_balances").insert({
       account_name: accountName,
       account_type: accountType,
       balance: Number(amount),
       recorded_at: date,
       note: note || null,
       owner: myOwner,
-    });
+    }).select().single();
 
     btn.disabled = false;
     btn.textContent = "新增";
@@ -2205,8 +2314,8 @@ if (balanceForm) {
     } else {
       msgEl.textContent = "已新增";
       msgEl.className = "entry-message success";
-      recentBalances.unshift({ account_name: accountName, balance: Number(amount), date });
-      renderRecentBalances();
+      rawBalances.push(data);
+      processAndRender();
       document.getElementById("balAmount").value = "";
       document.getElementById("balNote").value = "";
       document.getElementById("balUsdAmount").value = "";

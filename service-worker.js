@@ -1,4 +1,4 @@
-const CACHE_NAME = 'licaizhi-v42';
+const CACHE_NAME = 'licaizhi-v43';
 const APP_SHELL = [
   './index.html',
   './style.css',

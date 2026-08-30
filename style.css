@@ -139,6 +139,8 @@ html, body {
   cursor: pointer;
 }
 .segmented-btn.active { background: var(--card); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+#ownerFilterToggle { padding: 3px; }
+#ownerFilterToggle .segmented-btn { flex: 1; padding: 11px 14px; font-size: 14px; }
 
 .chart-hover-note {
   text-align: center;
@@ -526,7 +528,7 @@ html, body {
   font: inherit;
   gap: 8px;
 }
-.budget-edit-form { padding: 4px 0 14px; }
+.budget-edit-form, .balance-edit-form { padding: 4px 0 14px; }
 .budget-cat-group { margin-bottom: 10px; }
 .budget-cat-group:last-child { margin-bottom: 0; }
 .budget-dot {
