@@ -106,9 +106,6 @@ html, body {
   gap: 10px;
   margin-bottom: 14px;
 }
-@media (min-width: 420px) {
-  .stat-grid { grid-template-columns: repeat(4, 1fr); }
-}
 
 .card-title-row {
   display: flex;
