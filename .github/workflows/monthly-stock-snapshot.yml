@@ -1,0 +1,23 @@
+name: Monthly Stock Value Snapshot
+
+on:
+  schedule:
+    - cron: '0 23 1 * *' # 每月 1 號 UTC 23:00 = 台灣時間 2 號早上 07:00
+  workflow_dispatch: {}
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Compute and insert monthly stock value snapshot
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/monthly-stock-snapshot.mjs
