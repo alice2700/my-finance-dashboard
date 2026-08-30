@@ -628,10 +628,21 @@ function renderAssetComposition(year, month) {
       labels: flatRows.map((r) => r.label),
       datasets: [{ data: flatRows.map((r) => r.value), backgroundColor: PIE_COLORS, borderWidth: 2, borderColor: "#fff" }],
     },
+    plugins: [centerTextPlugin(() => [{ text: fmt(total), font: "600 15px -apple-system, sans-serif" }])],
     options: {
       plugins: {
-        legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 }, color: COLOR_MUTED } },
+        legend: { display: false },
         tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.raw)}` } },
+        datalabels: {
+          display: "auto",
+          color: "#fff",
+          font: { size: 11, weight: "600" },
+          formatter: (value, ctx) => {
+            const label = ctx.chart.data.labels[ctx.dataIndex];
+            const pct = total ? (value / total) * 100 : 0;
+            return `${label}\n${pct.toFixed(0)}%`;
+          },
+        },
       },
     },
   });
@@ -827,6 +838,32 @@ document.getElementById("rangeToggle").addEventListener("click", (e) => {
   balanceRange = btn.dataset.range;
   renderBalanceChart();
 });
+
+// 甜甜圈圖中間顯示文字用（例如總額）——Chart.js 沒有內建這個功能，用一個小 plugin 自己畫。
+// getLines() 回傳 [{text, font, color}, ...]，由呼叫端決定要顯示什麼、字型多大
+function centerTextPlugin(getLines) {
+  return {
+    id: "centerText",
+    afterDraw(chart) {
+      const lines = getLines();
+      if (!lines || !lines.length) return;
+      const { ctx, chartArea } = chart;
+      const cx = (chartArea.left + chartArea.right) / 2;
+      const cy = (chartArea.top + chartArea.bottom) / 2;
+      const lineHeight = 16;
+      const startY = cy - ((lines.length - 1) * lineHeight) / 2;
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      lines.forEach((line, i) => {
+        ctx.font = line.font || "600 11px -apple-system, sans-serif";
+        ctx.fillStyle = line.color || COLOR_INK;
+        ctx.fillText(line.text, cx, startY + i * lineHeight);
+      });
+      ctx.restore();
+    },
+  };
+}
 
 function baseChartOptions(showLegend) {
   return {
@@ -1961,6 +1998,29 @@ function renderStockTable(container, stocks, total) {
   });
 }
 
+// 總覽頁的資產走勢／股票淨值統計卡片，是在 renderStocks() 抓到即時股價之前就先畫好的（總覽比股票分頁先渲染，
+// 而且即時股價本來就要等一個外部 API 回來），股票市值只算 account_balances 裡手動記的部分——
+// YT 本來就是靠逐筆交易紀錄 + 即時股價追蹤，沒有手動記股票餘額，所以「本月」的股票市值會一直是 0。
+// 這裡在即時股價算完之後，把目前這個月的股票市值直接補進去，讓總覽頁的數字正確
+// （只能補「現在」這個月，之前的月份沒有逐月市值資料可以回推）
+function applyLiveStockValueToLatestTrend() {
+  const liveStockTotal = (assetCompositionStockTotals.tw || 0) + (assetCompositionStockTotals.us || 0);
+  if (!liveStockTotal) return;
+  const now = new Date();
+  const patch = (trendArr) => {
+    if (!trendArr.length) return;
+    const latest = trendArr[trendArr.length - 1];
+    if (latest.year !== now.getFullYear() || latest.month !== now.getMonth() + 1) return;
+    latest.stockPart = (latest.stockPart || 0) + liveStockTotal;
+    latest.asset = latest.activeDeposit + latest.timeDeposit + latest.stockPart;
+  };
+  patch(overviewTrend);
+  // overviewTrendYT/MG 只有家庭視角才有資料；即時股價目前只有 YT 在用逐筆交易追蹤（MG 還是手動記餘額，
+  // 不會跟這裡重複），所以這份補值歸給 YT 那一層是對的——如果之後 MG 也開始用逐筆交易追蹤，這裡要重新拆分
+  if (ownerFilter === "all") patch(overviewTrendYT);
+  renderOverview(overviewTrend);
+}
+
 function renderStocks(stocks) {
   const twEl = document.getElementById("stockTableTW");
   const usEl = document.getElementById("stockTableUS");
@@ -2003,6 +2063,7 @@ function renderStocks(stocks) {
     us: withValue.filter((s) => !s.isTW).reduce((sum, s) => sum + s.marketValue, 0),
   };
   renderAssetComposition();
+  applyLiveStockValueToLatestTrend();
 
   if (withValue.length) {
     // 圓餅圖看的是「這檔股票佔整體資產多少比例」，不分是誰的，所以這裡先照代號合併加總，
@@ -2025,6 +2086,7 @@ function renderStocks(stocks) {
         labels: chartSlices.map((s) => s.label),
         datasets: [{ data: chartSlices.map((s) => s.value), backgroundColor: PIE_COLORS, borderWidth: 2, borderColor: "#fff" }],
       },
+      plugins: [centerTextPlugin(() => [{ text: fmt(total), font: "600 15px -apple-system, sans-serif" }])],
       options: {
         plugins: {
           legend: { display: false },
@@ -2044,9 +2106,11 @@ function renderStocks(stocks) {
     });
   }
   const sign = (n) => (n >= 0 ? "+" : "");
-  summaryEl.textContent =
-    `總市值 ${fmt(total)} ｜ 未實現損益 ${sign(totalUnrealized)}${fmt(totalUnrealized)}` +
-    (totalRealized ? ` ｜ 已實現損益 ${sign(totalRealized)}${fmt(totalRealized)}` : "");
+  const totalCostBasis = merged.reduce((sum, s) => sum + (s.costBasis || 0), 0);
+  summaryEl.innerHTML =
+    `<div>投入成本 ${fmt(totalCostBasis)}</div>` +
+    `<div class="${totalUnrealized >= 0 ? "gain-pos" : "gain-neg"}">未實現損益 ${sign(totalUnrealized)}${fmt(totalUnrealized)}</div>` +
+    (totalRealized ? `<div class="gain-muted">已實現損益 ${sign(totalRealized)}${fmt(totalRealized)}</div>` : "");
 
   renderStockTable(twEl, merged.filter((s) => s.isTW), total);
   renderStockTable(usEl, merged.filter((s) => !s.isTW), total);
