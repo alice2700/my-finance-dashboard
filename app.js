@@ -105,6 +105,7 @@ function showApp() {
   document.getElementById("app").classList.remove("hidden");
   document.querySelector(".tabbar").classList.remove("hidden");
   document.getElementById("logoutBtn").classList.remove("hidden");
+  document.getElementById("refreshBtn").classList.remove("hidden");
   document.getElementById("ownerFilterToggle").classList.remove("hidden");
 }
 
@@ -113,8 +114,27 @@ function showLogin() {
   document.getElementById("app").classList.add("hidden");
   document.querySelector(".tabbar").classList.add("hidden");
   document.getElementById("logoutBtn").classList.add("hidden");
+  document.getElementById("refreshBtn").classList.add("hidden");
   document.getElementById("ownerFilterToggle").classList.add("hidden");
 }
+
+// 裝成主畫面 App 之後沒有網址列可以下拉刷新，這顆按鈕身兼兩件事：
+// 1. 重抓 Supabase 資料（最常見的需求：想看到對方剛剛新增的紀錄）
+// 2. 順便叫 service worker 檢查有沒有新版程式碼（我們每次改版都會換 CACHE_NAME，
+//    reg.update() 抓到版本不同就會裝新的並立刻接管），裝好後這裡的 reload() 就會吃到新版
+document.getElementById("refreshBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("refreshBtn");
+  btn.disabled = true;
+  btn.classList.add("spinning");
+  try {
+    if ("serviceWorker" in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) { try { await reg.update(); } catch (e) {} }
+    }
+  } finally {
+    location.reload();
+  }
+});
 
 document.getElementById("loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
