@@ -528,7 +528,7 @@ html, body {
   font: inherit;
   gap: 8px;
 }
-.budget-edit-form, .balance-edit-form { padding: 4px 0 14px; }
+.budget-edit-form, .balance-edit-form, .stocktxn-edit-form { padding: 4px 0 14px; }
 .budget-cat-group { margin-bottom: 10px; }
 .budget-cat-group:last-child { margin-bottom: 0; }
 .budget-dot {

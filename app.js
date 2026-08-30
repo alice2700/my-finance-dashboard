@@ -201,7 +201,7 @@ async function loadData() {
       sb.from("account_balances").select("id,account_name,account_type,balance,recorded_at,note,owner").order("recorded_at"),
       sb.from("transactions").select("id,date,amount,type,category_id,note,is_special,is_pending,pending_group,owner").limit(5000),
       sb.from("goals_assumptions").select("*").limit(1),
-      sb.from("stock_transactions").select("id,ticker,market,stock_name,trade_date,side,shares,amount_twd,buy_type,owner").limit(5000),
+      sb.from("stock_transactions").select("id,ticker,market,stock_name,trade_date,side,shares,amount_twd,buy_type,note,owner").limit(5000),
       sb.from("budget_groups").select("id,name,mode"),
       sb.from("budget_group_categories").select("budget_group_id,category_id"),
       sb.from("budget_amounts").select("budget_group_id,year,month,amount"),
@@ -277,48 +277,73 @@ function buildAssetTrend(snapshots, balances, txns) {
     };
   });
 
-  // 每個帳戶在每個月取「當月最新一筆」餘額
-  // account_type：cash=活期存款、investment=定存/基金/儲蓄險等、stock=股票
-  // key 用 owner+帳戶名稱組合，不能只用帳戶名稱——YT/MG 的帳戶名稱下拉選單有好幾個是共用的
-  // （linebank-主帳戶、郵局、股票…），只用帳戶名稱當 key 在家庭視角下會讓其中一人的資料被覆蓋掉
-  const latestByAccountMonth = {}; // "y-m" -> { "owner||accountName": balanceRow }
+  // 每個帳戶（owner+帳戶名稱）依時間排序的完整歷史，用來做「沿用最後一筆」：
+  // 帳戶當月沒有新紀錄時，不能直接當成 0，要抓它上一次記錄的餘額繼續沿用，
+  // 直到有新紀錄為止——不然很少更新的帳戶（例如久久才登入一次的銀行帳戶）
+  // 會讓那幾個月的總資產被低估
+  const acctHistory = {}; // "owner||accountName" -> [balanceRow]，依 recorded_at 由舊到新排序
   (balances || []).forEach((b) => {
-    const d = new Date(b.recorded_at);
-    const key = d.getFullYear() + "-" + (d.getMonth() + 1);
     const acctKey = b.owner + "||" + b.account_name;
-    if (!latestByAccountMonth[key]) latestByAccountMonth[key] = {};
-    const cur = latestByAccountMonth[key][acctKey];
-    if (!cur || new Date(b.recorded_at) > new Date(cur.recorded_at)) {
-      latestByAccountMonth[key][acctKey] = b;
-    }
+    if (!acctHistory[acctKey]) acctHistory[acctKey] = [];
+    acctHistory[acctKey].push(b);
   });
+  Object.values(acctHistory).forEach((rows) => rows.sort((a, b) => new Date(a.recorded_at) - new Date(b.recorded_at)));
 
-  const fromBalances = Object.keys(latestByAccountMonth)
-    .filter((key) => !snapshotMonths.has(key))
-    .map((key) => {
-      const [y, m] = key.split("-").map(Number);
-      let activeDeposit = 0;
-      let timeDeposit = 0;
-      let stockPart = 0;
-      Object.values(latestByAccountMonth[key]).forEach((b) => {
-        if (b.account_type === "stock") stockPart += Number(b.balance);
-        else if (b.account_type === "investment") timeDeposit += Number(b.balance);
-        else activeDeposit += Number(b.balance);
-      });
-      const mo = monthly[key] || { income: 0, expense: 0 };
-      return {
-        year: y,
-        month: m,
-        label: String(y).slice(2) + "/" + m,
-        asset: activeDeposit + timeDeposit + stockPart,
-        cashPart: activeDeposit + timeDeposit,
-        activeDeposit,
-        timeDeposit,
-        stockPart,
-        income: mo.income,
-        expense: mo.expense,
-      };
-    });
+  // account_type：cash=活期存款、investment=定存/基金/儲蓄險等、stock=股票
+  const latestByAccountMonth = {}; // "y-m" -> { "owner||accountName": balanceRow }，每個月沿用到當時為止最新的一筆
+  const fromBalances = [];
+  if (balances && balances.length) {
+    const minDate = balances.reduce((min, b) => {
+      const d = new Date(b.recorded_at);
+      return !min || d < min ? d : min;
+    }, null);
+    const now = new Date();
+    let y = minDate.getFullYear();
+    let m = minDate.getMonth() + 1;
+    while (y < now.getFullYear() || (y === now.getFullYear() && m <= now.getMonth() + 1)) {
+      const key = y + "-" + m;
+      if (!snapshotMonths.has(key)) {
+        const cutoff = new Date(y, m, 1); // 下個月 1 號零點——早於這個時間點的紀錄都算「這個月或更早」
+        const monthSnapshot = {};
+        let activeDeposit = 0;
+        let timeDeposit = 0;
+        let stockPart = 0;
+        let hasAny = false;
+        Object.entries(acctHistory).forEach(([acctKey, rows]) => {
+          let latest = null;
+          for (const row of rows) {
+            if (new Date(row.recorded_at) < cutoff) latest = row;
+            else break;
+          }
+          if (latest) {
+            hasAny = true;
+            monthSnapshot[acctKey] = latest;
+            if (latest.account_type === "stock") stockPart += Number(latest.balance);
+            else if (latest.account_type === "investment") timeDeposit += Number(latest.balance);
+            else activeDeposit += Number(latest.balance);
+          }
+        });
+        if (hasAny) {
+          latestByAccountMonth[key] = monthSnapshot;
+          const mo = monthly[key] || { income: 0, expense: 0 };
+          fromBalances.push({
+            year: y,
+            month: m,
+            label: String(y).slice(2) + "/" + m,
+            asset: activeDeposit + timeDeposit + stockPart,
+            cashPart: activeDeposit + timeDeposit,
+            activeDeposit,
+            timeDeposit,
+            stockPart,
+            income: mo.income,
+            expense: mo.expense,
+          });
+        }
+      }
+      m++;
+      if (m > 12) { m = 1; y++; }
+    }
+  }
 
   const trend = fromSnapshots.concat(fromBalances).sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
 
@@ -425,6 +450,7 @@ function processAndRender() {
     renderBudgetSettings();
     renderGoalsSettingsForm();
     renderRecentBalances();
+    renderRecentStockTxns();
 
     document.getElementById("updatedAt").textContent =
       "更新於 " + new Date().toLocaleString("zh-TW", { hour12: false });
@@ -2772,6 +2798,144 @@ if (stockCsvConfirmBtn) {
     processAndRender();
     document.getElementById("stockCsvPreview").innerHTML = "";
     document.getElementById("stockCsvFile").value = "";
+  });
+}
+
+// ---------- 輸入：最近的股票交易（可編輯/刪除，CSV 匯入偶爾會匯錯或需要修正） ----------
+let stockTxnEditingId = null;
+
+function renderRecentStockTxns() {
+  const el = document.getElementById("stockTxnRecent");
+  if (!el) return;
+  const mine = (rawStockTxns || [])
+    .filter((t) => t.owner === myOwner)
+    .slice()
+    .sort((a, b) => new Date(b.trade_date) - new Date(a.trade_date))
+    .slice(0, 15);
+
+  if (!mine.length) {
+    el.innerHTML = '<div class="flow-item-top"><span class="flow-item-name">尚無股票交易紀錄</span></div>';
+    return;
+  }
+
+  el.innerHTML = mine.map((t) => {
+    const isOpen = String(stockTxnEditingId) === String(t.id);
+    const sideLabel = t.side === "buy" ? "買進" : "賣出";
+    return `<div class="budget-settings-row">
+      <button type="button" class="budget-settings-header" data-id="${t.id}">
+        <span class="budget-name">${t.ticker}｜${sideLabel}（${t.trade_date}）</span>
+        <span class="stat-sub">${Number(t.shares).toLocaleString("zh-TW")} 股・${fmt(t.amount_twd)}</span>
+      </button>
+      ${isOpen ? renderStockTxnEditForm(t) : ""}
+    </div>`;
+  }).join("");
+
+  el.querySelectorAll(".budget-settings-header").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      stockTxnEditingId = String(stockTxnEditingId) === btn.dataset.id ? null : btn.dataset.id;
+      renderRecentStockTxns();
+    });
+  });
+  wireStockTxnEditForm();
+}
+
+function renderStockTxnEditForm(t) {
+  const noteVal = (t.note || "").replace(/"/g, "&quot;");
+  return `<div class="stocktxn-edit-form entry-form" data-id="${t.id}">
+    <label>股票代號<input type="text" class="ste-ticker" value="${t.ticker}" /></label>
+    <label>股票名稱<input type="text" class="ste-name" value="${t.stock_name || ""}" /></label>
+    <label>買賣別
+      <select class="ste-side">
+        <option value="buy"${t.side === "buy" ? " selected" : ""}>買進</option>
+        <option value="sell"${t.side === "sell" ? " selected" : ""}>賣出</option>
+      </select>
+    </label>
+    <label>股數<input type="number" class="ste-shares" value="${t.shares}" step="1" inputmode="decimal" /></label>
+    <label>台幣金額<input type="number" class="ste-amount" value="${t.amount_twd}" step="1" inputmode="decimal" /></label>
+    <label>交易日期<input type="date" class="ste-date" value="${t.trade_date}" /></label>
+    <label class="ste-buytype-label" style="${t.side === "buy" ? "" : "display:none;"}">買進類型
+      <select class="ste-buytype">
+        <option value="recurring"${t.buy_type === "recurring" ? " selected" : ""}>定期定額</option>
+        <option value="lump"${t.buy_type === "lump" ? " selected" : ""}>單筆</option>
+      </select>
+    </label>
+    <label>備註<input type="text" class="ste-note" value="${noteVal}" /></label>
+    <div style="display:flex;gap:8px;">
+      <button type="button" class="ste-save" style="flex:1;">儲存</button>
+      <button type="button" class="ste-cancel" style="flex:1;background:var(--card);color:var(--ink);border:1px solid var(--border);">取消</button>
+      <button type="button" class="ste-delete" style="flex:1;background:var(--card);color:var(--clay);border:1px solid var(--clay);">刪除</button>
+    </div>
+    <p class="ste-status entry-message hidden"></p>
+  </div>`;
+}
+
+function wireStockTxnEditForm() {
+  const form = document.querySelector(".stocktxn-edit-form");
+  if (!form) return;
+  const id = form.dataset.id;
+  const sideSelect = form.querySelector(".ste-side");
+  const buyTypeLabel = form.querySelector(".ste-buytype-label");
+
+  sideSelect.addEventListener("change", () => {
+    buyTypeLabel.style.display = sideSelect.value === "buy" ? "" : "none";
+  });
+
+  form.querySelector(".ste-cancel").addEventListener("click", () => {
+    stockTxnEditingId = null;
+    renderRecentStockTxns();
+  });
+
+  form.querySelector(".ste-save").addEventListener("click", async () => {
+    const saveBtn = form.querySelector(".ste-save");
+    const statusEl = form.querySelector(".ste-status");
+    const side = sideSelect.value;
+    const fields = {
+      ticker: form.querySelector(".ste-ticker").value.trim(),
+      stock_name: form.querySelector(".ste-name").value.trim() || null,
+      side,
+      shares: Number(form.querySelector(".ste-shares").value),
+      amount_twd: Number(form.querySelector(".ste-amount").value),
+      trade_date: form.querySelector(".ste-date").value,
+      buy_type: side === "buy" ? form.querySelector(".ste-buytype").value : null,
+      note: form.querySelector(".ste-note").value.trim() || null,
+    };
+    saveBtn.disabled = true;
+    statusEl.classList.remove("hidden");
+    statusEl.className = "ste-status entry-message";
+    statusEl.textContent = "儲存中...";
+    const { error } = await sb.from("stock_transactions").update(fields).eq("id", id);
+    saveBtn.disabled = false;
+    if (error) {
+      statusEl.textContent = "儲存失敗：" + error.message;
+      statusEl.className = "ste-status entry-message error";
+      statusEl.classList.remove("hidden");
+      return;
+    }
+    const row = rawStockTxns.find((t) => String(t.id) === String(id));
+    if (row) Object.assign(row, fields);
+    stockTxnEditingId = null;
+    processAndRender();
+  });
+
+  form.querySelector(".ste-delete").addEventListener("click", async () => {
+    const deleteBtn = form.querySelector(".ste-delete");
+    const statusEl = form.querySelector(".ste-status");
+    if (!confirm("確定要刪除這筆股票交易嗎？這個動作沒辦法復原。")) return;
+    deleteBtn.disabled = true;
+    statusEl.classList.remove("hidden");
+    statusEl.className = "ste-status entry-message";
+    statusEl.textContent = "刪除中...";
+    const { error } = await sb.from("stock_transactions").delete().eq("id", id);
+    deleteBtn.disabled = false;
+    if (error) {
+      statusEl.textContent = "刪除失敗：" + error.message;
+      statusEl.className = "ste-status entry-message error";
+      statusEl.classList.remove("hidden");
+      return;
+    }
+    rawStockTxns = rawStockTxns.filter((t) => String(t.id) !== String(id));
+    stockTxnEditingId = null;
+    processAndRender();
   });
 }
 
