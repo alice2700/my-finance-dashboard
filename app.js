@@ -2003,21 +2003,41 @@ function renderStockTable(container, stocks, total) {
 // YT 本來就是靠逐筆交易紀錄 + 即時股價追蹤，沒有手動記股票餘額，所以「本月」的股票市值會一直是 0。
 // 這裡在即時股價算完之後，把目前這個月的股票市值直接補進去，讓總覽頁的數字正確
 // （只能補「現在」這個月，之前的月份沒有逐月市值資料可以回推）
-function applyLiveStockValueToLatestTrend() {
-  const liveStockTotal = (assetCompositionStockTotals.tw || 0) + (assetCompositionStockTotals.us || 0);
-  if (!liveStockTotal) return;
+// liveStockByOwner：{ YT: 市值, MG: 市值 }，只包含真的有逐筆股票交易紀錄、算得出即時市值的 owner
+// （目前兩人都有了）。這個函式只是「補畫面顯示用」，不會寫回資料庫——account_balances 完全不會被動到，
+// 每次重新載入都是即時重算，不是存檔的數字
+function applyLiveStockValueToLatestTrend(liveStockByOwner) {
   const now = new Date();
-  const patch = (trendArr) => {
+  const cutoff = new Date(now.getFullYear(), now.getMonth() + 1, 1); // 下個月 1 號零點
+
+  // 如果某個 owner 已經改成逐筆交易追蹤，他手動記在 account_balances 的「股票」餘額對「現在這個月」
+  // 來說就不該再算了，不然會跟這裡補的即時市值重複計算——所以要先把「這個月本來會沿用進去的手動股票餘額」
+  // 扣掉，再補上即時市值。只影響「現在這個月」，之前月份的歷史紀錄照舊不動
+  const manualStockByOwner = {};
+  Object.keys(liveStockByOwner).forEach((owner) => {
+    const rows = (rawBalances || [])
+      .filter((b) => b.owner === owner && b.account_type === "stock" && new Date(b.recorded_at) < cutoff)
+      .sort((a, b) => new Date(b.recorded_at) - new Date(a.recorded_at));
+    manualStockByOwner[owner] = rows.length ? Number(rows[0].balance) : 0;
+  });
+
+  const patch = (trendArr, liveAmount, manualAmount) => {
     if (!trendArr.length) return;
     const latest = trendArr[trendArr.length - 1];
     if (latest.year !== now.getFullYear() || latest.month !== now.getMonth() + 1) return;
-    latest.stockPart = (latest.stockPart || 0) + liveStockTotal;
+    latest.stockPart = Math.max(0, (latest.stockPart || 0) - manualAmount) + liveAmount;
     latest.asset = latest.activeDeposit + latest.timeDeposit + latest.stockPart;
   };
-  patch(overviewTrend);
-  // overviewTrendYT/MG 只有家庭視角才有資料；即時股價目前只有 YT 在用逐筆交易追蹤（MG 還是手動記餘額，
-  // 不會跟這裡重複），所以這份補值歸給 YT 那一層是對的——如果之後 MG 也開始用逐筆交易追蹤，這裡要重新拆分
-  if (ownerFilter === "all") patch(overviewTrendYT);
+
+  const totalLive = Object.values(liveStockByOwner).reduce((s, v) => s + v, 0);
+  const totalManual = Object.values(manualStockByOwner).reduce((s, v) => s + v, 0);
+  if (!totalLive && !totalManual) return;
+  patch(overviewTrend, totalLive, totalManual);
+  // overviewTrendYT/MG 只有家庭視角才有資料，堆疊圖要分開算，不能直接套用合計
+  if (ownerFilter === "all") {
+    patch(overviewTrendYT, liveStockByOwner.YT || 0, manualStockByOwner.YT || 0);
+    patch(overviewTrendMG, liveStockByOwner.MG || 0, manualStockByOwner.MG || 0);
+  }
   renderOverview(overviewTrend);
 }
 
@@ -2063,7 +2083,10 @@ function renderStocks(stocks) {
     us: withValue.filter((s) => !s.isTW).reduce((sum, s) => sum + s.marketValue, 0),
   };
   renderAssetComposition();
-  applyLiveStockValueToLatestTrend();
+
+  const liveStockByOwner = {};
+  withValue.forEach((s) => { liveStockByOwner[s.owner] = (liveStockByOwner[s.owner] || 0) + s.marketValue; });
+  applyLiveStockValueToLatestTrend(liveStockByOwner);
 
   if (withValue.length) {
     // 圓餅圖看的是「這檔股票佔整體資產多少比例」，不分是誰的，所以這裡先照代號合併加總，
