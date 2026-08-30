@@ -596,9 +596,10 @@ function renderAssetComposition(year, month) {
 
   const stockRows = [];
   if (isLatest) {
-    // 台股/美股是從 YT 的 stock_transactions/Apps Script 算出來的，目前只有她這樣追蹤
-    if (assetCompositionStockTotals.tw != null) stockRows.push({ name: "台股", owner: "YT", value: assetCompositionStockTotals.tw });
-    if (assetCompositionStockTotals.us != null) stockRows.push({ name: "美股", owner: "YT", value: assetCompositionStockTotals.us });
+    // 台股/美股是 stock_transactions/Apps Script 算出來的合計市值，家庭視角下可能是 YT+MG 兩人的加總，
+    // 不屬於單一一人，所以不標 owner 圓點（標了反而誤導）
+    if (assetCompositionStockTotals.tw != null) stockRows.push({ name: "台股", value: assetCompositionStockTotals.tw });
+    if (assetCompositionStockTotals.us != null) stockRows.push({ name: "美股", value: assetCompositionStockTotals.us });
     // account_balances 裡手動記錄的股票總額（例如 MG 目前用這種方式記錄，還沒有逐筆 stock_transactions）
     stockRows.push(...manualStockAccounts);
   } else {
@@ -1818,16 +1819,19 @@ function fallbackMarketValue(code, shares) {
 }
 const DIVIDEND_CATEGORY_ID = 3; // category_map 裡「現金股利」固定是 id=3
 
+// key 用 "owner||ticker"，不能只用 ticker——家庭視角下 YT/MG 常常持有同一檔股票（0050、00878...），
+// 只用 ticker 當 key 會把兩人的股數/成本混在一起平均，算出來的均價/損益對誰都沒有意義
 function buildStockPositions(stockTxns, txns, catMap) {
   const positions = {};
   [...stockTxns]
     .filter((t) => t.side === "buy" || t.side === "sell")
     .sort((a, b) => (a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0))
     .forEach((t) => {
-      if (!positions[t.ticker]) {
-        positions[t.ticker] = { market: t.market, name: t.stock_name, shares: 0, costBasis: 0, realizedGain: 0 };
+      const key = t.owner + "||" + t.ticker;
+      if (!positions[key]) {
+        positions[key] = { ticker: t.ticker, owner: t.owner, market: t.market, name: t.stock_name, shares: 0, costBasis: 0, realizedGain: 0 };
       }
-      const p = positions[t.ticker];
+      const p = positions[key];
       const amt = Number(t.amount_twd || 0);
       const shares = Number(t.shares || 0);
       if (t.side === "buy") {
@@ -1843,16 +1847,19 @@ function buildStockPositions(stockTxns, txns, catMap) {
     });
 
   // 累計現金股利：transactions 表「現金股利」分類，備註對到股票代號（不影響成本，只用來算含股利總報酬）
+  // 股利一樣要照 owner+代號 分開算，不然家庭視角下兩人的股利會混在一起
   const dividends = {};
   (txns || []).forEach((t) => {
     if (t.category_id !== DIVIDEND_CATEGORY_ID) return;
-    const key = (t.note || "").trim().toUpperCase();
-    if (!key) return;
+    const ticker = (t.note || "").trim().toUpperCase();
+    if (!ticker) return;
+    const key = t.owner + "||" + ticker;
     dividends[key] = (dividends[key] || 0) + Number(t.amount);
   });
 
-  Object.keys(positions).forEach((ticker) => {
-    positions[ticker].dividends = dividends[ticker.toUpperCase()] || 0;
+  Object.values(positions).forEach((pos) => {
+    const key = pos.owner + "||" + pos.ticker.toUpperCase();
+    pos.dividends = dividends[key] || 0;
   });
 
   return positions;
@@ -1879,15 +1886,24 @@ function parseStock(s) {
 }
 
 // 把 Apps Script 抓到的現價資料，跟 stock_transactions 算出來的均價/成本/損益合併
+// 用 stock.posKey（"owner||ticker"）查 stockPositions，不能用 code，理由同上
 function enrichWithPosition(stock) {
-  const pos = stockPositions[stock.code];
+  const pos = stockPositions[stock.posKey];
   if (!pos) return stock;
   const avgCost = pos.shares > 0 ? pos.costBasis / pos.shares : null;
-  const marketValue = stock.marketValue != null ? stock.marketValue : fallbackMarketValue(stock.code, pos.shares);
+  // Apps Script 回傳的 marketValue 是針對「她 Google 試算表裡記錄的股數」算出來的總額，不是每股價格，
+  // 家庭視角下兩人持有同一檔時不能直接套用同一個數字（對另一人的股數來說是錯的）。
+  // 這裡改成優先用 stock.price（現價，跟 owner 無關）× 我們自己在 Supabase 算出來的股數，
+  // 兩個人都能各自算對；只有抓不到 price（bond ETF/興櫃常見）時才退回 marketValue／其他備援
+  const price = stock.price != null && stock.price !== "#N/A" ? Number(stock.price) : null;
+  const marketValue = price != null && pos.shares > 0
+    ? price * pos.shares
+    : (stock.marketValue != null ? stock.marketValue : fallbackMarketValue(stock.code, pos.shares));
   const unrealizedGain = marketValue != null && pos.shares > 0 ? marketValue - pos.costBasis : null;
   const totalReturn = unrealizedGain != null ? unrealizedGain + pos.realizedGain + pos.dividends : null;
   return {
     ...stock,
+    owner: pos.owner,
     marketValue,
     avgCost,
     costBasis: pos.costBasis,
@@ -1919,12 +1935,15 @@ function renderStockTable(container, stocks, total) {
     } else if (s.costBasis) {
       gainHtml = `<div class="stock-gain-row"><span class="gain-muted">成本 ${fmt(s.costBasis)} · 尚無市值資料</span></div>`;
     }
+    const dot = ownerFilter === "all" && s.owner
+      ? `<span class="flow-tx-owner-dot" style="background:${s.owner === "MG" ? COLOR_MG_STACK : COLOR_YT_STACK};margin-right:2px;" title="${s.owner}"></span>`
+      : "";
     const row = document.createElement("button");
     row.type = "button";
     row.className = "stock-row";
     row.innerHTML = `
       <div class="stock-row-top">
-        <span class="stock-code">${s.code}</span>
+        ${dot}<span class="stock-code">${s.code}</span>
         <span class="stock-name">${s.name}</span>
         <span class="stock-value">${s.marketValue != null ? fmt(s.marketValue) : "尚無市值資料"}</span>
         <span class="stock-pct">${s.marketValue != null ? pct.toFixed(1) + "%" : ""}</span>
@@ -1947,26 +1966,21 @@ function renderStocks(stocks) {
   const usEl = document.getElementById("stockTableUS");
   const summaryEl = document.getElementById("stocksSummary");
 
-  // Apps Script 的股價來源不分 owner（它是外部的 Google試算表，本來就只知道有哪些代號），
-  // 所以這裡要自己再用 stockPositions（已經依 owner 篩過）擋一次，
-  // 不然切到沒有任何股票交易紀錄的 owner 時，畫面還是會照樣顯示 Apps Script 抓到的整批股票
+  // Apps Script 的股價來源不分 owner（它是外部的 Google試算表，只知道有哪些代號、不知道是誰的），
+  // 所以這裡直接照 stockPositions（owner+ticker 分開存）逐一走訪，一檔股票如果兩人都有持有，
+  // 會各自出現一列，套用同一個代號查到的現價——不然切到沒有任何股票交易紀錄的 owner 時畫面會照樣
+  // 顯示 Apps Script 抓到的整批股票；家庭視角下兩人若持有同一檔，股數/成本也不會被誤混在一起平均
   const parsedApi = (stocks || []).map(parseStock);
-  const apiCodes = new Set(parsedApi.map((s) => s.code));
-  const fromApi = parsedApi.filter((s) => stockPositions[s.code] && stockPositions[s.code].shares > 0.0001);
+  const apiByCode = {};
+  parsedApi.forEach((s) => { apiByCode[s.code] = s; });
 
-  // stockPositions 裡有、但 Apps Script 沒回傳現價的（目前主要是美股），另外補一列進來
-  const extra = Object.keys(stockPositions)
-    .filter((ticker) => !apiCodes.has(ticker) && stockPositions[ticker].shares > 0.0001)
-    .map((ticker) => {
-      const pos = stockPositions[ticker];
-      const marketValue = fallbackMarketValue(ticker, pos.shares);
-      return {
-        ticker, code: ticker, name: pos.name || "", shares: pos.shares, price: null,
-        marketValue, isTW: pos.market === "TW",
-      };
+  const merged = Object.entries(stockPositions)
+    .filter(([, pos]) => pos.shares > 0.0001)
+    .map(([posKey, pos]) => {
+      const apiMatch = apiByCode[pos.ticker];
+      const base = apiMatch ? { ...apiMatch } : { ticker: pos.ticker, code: pos.ticker, name: pos.name || "", isTW: pos.market === "TW" };
+      return enrichWithPosition({ ...base, posKey });
     });
-
-  const merged = fromApi.concat(extra).map(enrichWithPosition);
 
   if (!merged.length) {
     const msg = stocks && stocks.length ? "這個視角目前尚無股票資料" : "尚無資料，請確認股票分頁已加入「現價」欄位";
@@ -1991,12 +2005,17 @@ function renderStocks(stocks) {
   renderAssetComposition();
 
   if (withValue.length) {
+    // 圓餅圖看的是「這檔股票佔整體資產多少比例」，不分是誰的，所以這裡先照代號合併加總，
+    // 不用 posKey（家庭視角下同一檔股票兩人持有時，圖上只會有一片，不會拆成兩片）
+    const byTicker = {};
+    withValue.forEach((s) => { byTicker[s.code] = (byTicker[s.code] || 0) + s.marketValue; });
+
     const GROUP_THRESHOLD = 0.04;
     const chartSlices = [];
     let otherTotal = 0;
-    [...withValue].sort((a, b) => b.marketValue - a.marketValue).forEach((s) => {
-      if (total && s.marketValue / total >= GROUP_THRESHOLD) chartSlices.push({ label: s.code, value: s.marketValue });
-      else otherTotal += s.marketValue;
+    Object.entries(byTicker).sort((a, b) => b[1] - a[1]).forEach(([code, value]) => {
+      if (total && value / total >= GROUP_THRESHOLD) chartSlices.push({ label: code, value });
+      else otherTotal += value;
     });
     if (otherTotal > 0) chartSlices.push({ label: "其他", value: otherTotal });
 
